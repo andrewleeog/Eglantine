@@ -131,6 +131,16 @@ GPUVAddr MemoryManager::PageTableOp(GPUVAddr gpu_addr, [[maybe_unused]] DAddr de
         }
     };
     for (u64 offset{}; offset < size; offset += page_size) {
+    // The caches hear about each run of pages whose entry changed in one call, not page by page
+    // (a 1.45 GB Switch 2 region made ~370,000 texture cache scans).
+    GPUVAddr modified_start{};
+    u64 modified_size{};
+    const auto flush_modified = [&] {
+        if (modified_size != 0) {
+            rasterizer->ModifyGPUMemory(unique_identifier, modified_start, modified_size);
+            modified_size = 0;
+        }
+    };
         const GPUVAddr current_gpu_addr = gpu_addr + offset;
         [[maybe_unused]] const auto current_entry_type = GetEntry(current_gpu_addr, false);
         SetEntry(current_gpu_addr, entry_type, false);
@@ -152,6 +162,7 @@ GPUVAddr MemoryManager::PageTableOp(GPUVAddr gpu_addr, [[maybe_unused]] DAddr de
     }
     flush_modified();
     kind_map.Map(gpu_addr, gpu_addr + size, kind);
+    flush_modified();
     return gpu_addr;
 }
 
@@ -166,6 +177,14 @@ GPUVAddr MemoryManager::BigPageTableOp(GPUVAddr gpu_addr, [[maybe_unused]] DAddr
         }
     };
     for (u64 offset{}; offset < size; offset += big_page_size) {
+    GPUVAddr modified_start{};
+    u64 modified_size{};
+    const auto flush_modified = [&] {
+        if (modified_size != 0) {
+            rasterizer->ModifyGPUMemory(unique_identifier, modified_start, modified_size);
+            modified_size = 0;
+        }
+    };
         const GPUVAddr current_gpu_addr = gpu_addr + offset;
         [[maybe_unused]] const auto current_entry_type = GetEntry(current_gpu_addr, true);
         SetEntry(current_gpu_addr, entry_type, true);
@@ -204,6 +223,7 @@ GPUVAddr MemoryManager::BigPageTableOp(GPUVAddr gpu_addr, [[maybe_unused]] DAddr
     }
     flush_modified();
     {
+    flush_modified();
         std::unique_lock<std::mutex> lock(guard);
         kind_map.Map(gpu_addr, gpu_addr + size, kind);
     }
