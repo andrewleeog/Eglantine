@@ -474,8 +474,13 @@ static void RunKeyScript(InputCommon::InputSubsystem& input_subsystem) {
                  code < 0 ? "release" : "press", code < 0 ? -code : code, elapsed, frame);
         if (code < 0) {
             input_subsystem.GetKeyboard()->ReleaseKey(static_cast<std::size_t>(-code));
+            input_subsystem.GetKeyboard()->ReleaseKeyboardKey(static_cast<std::size_t>(-code));
         } else {
             input_subsystem.GetKeyboard()->PressKey(static_cast<std::size_t>(code));
+            // Also press the HID keyboard key with the same index: NativeKeyboard's letters are
+            // numbered like SDL scancodes, and titles that read the keyboard device instead of the
+            // pad need this second path. (Bananza's intro reacts to neither yet.)
+            input_subsystem.GetKeyboard()->PressKeyboardKey(static_cast<std::size_t>(code));
         }
         ++next;
     }
