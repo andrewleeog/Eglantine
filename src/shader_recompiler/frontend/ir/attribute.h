@@ -237,7 +237,9 @@ constexpr size_t NUM_GENERICS = 32;
 constexpr size_t NUM_FIXEDFNCTEXTURE = 10;
 
 [[nodiscard]] inline bool IsGeneric(Attribute attribute) noexcept {
-    return attribute >= Attribute::Generic0X && attribute <= Attribute::Generic31X;
+    // Through W: every generic slot has four components, and a pipeline reading only the Y of the
+    // last slot (Generic31Y) used to fall through to "Read attribute ... is not implemented".
+    return attribute >= Attribute::Generic0X && attribute <= Attribute::Generic31W;
 }
 
 [[nodiscard]] inline bool IsLegacyAttribute(Attribute attribute) noexcept {
