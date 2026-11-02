@@ -797,7 +797,9 @@ struct Memory::Impl {
             return;
         }
         auto& current_area = rasterizer_read_areas[core];
-        if (const u64 generation = read_trap_generation.load(std::memory_order_acquire);
+        // Both only grow, so the sum changes whenever either does.
+        if (const u64 generation = read_trap_generation.load(std::memory_order_acquire) +
+                                   gpu_device_memory->ReadAreaGeneration();
             read_area_generations[core] != generation) {
             current_area = {};
             read_area_generations[core] = generation;
