@@ -1376,7 +1376,13 @@ private:
             const char* text = std::getenv("EDEN_NX2_DUMP");
             return text ? std::string{text} : std::string{};
         }();
-        if (spec.empty() || m_presents != std::strtoull(spec.c_str(), nullptr, 10)) {
+        if (spec.empty()) {
+            return;
+        }
+        // The spec's first number is the first present to dump at; fire again every 500
+        // presents after it, so slow-loading runs still land during gameplay.
+        static const u64 first = std::strtoull(spec.c_str(), nullptr, 10);
+        if (m_presents < first || (m_presents - first) % 500 != 0) {
             return;
         }
         const char* const directory = std::getenv("EDEN_NX2_FRAME_CAPTURE");

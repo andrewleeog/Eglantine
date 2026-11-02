@@ -508,6 +508,47 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
                                  : maxwell3d->draw_manager.draw_state.vertex_buffer.count);
     // EDEN_NX2_CB24_TRACE: for draws whose vertex shader reads bank 24, show the inline
     // constant buffer upload target (CB_ADDRESS) and its first words.
+    // EDEN_NX2_DRAW_PROBE: periodically describe draws (rt, topology, streams, index
+    // buffer) and sample the first bytes of each enabled vertex stream, so we can tell
+    // whether the geometry buffers the scene draws read are actually populated.
+    if (static const bool probe = std::getenv("EDEN_NX2_DRAW_PROBE") != nullptr; probe) {
+        static u32 probe_n{};
+        static u32 probe_logged{};
+        static std::chrono::steady_clock::time_point last_log{};
+        const auto now = std::chrono::steady_clock::now();
+        if (++probe_n % 2048 == 1 && probe_logged < 400 && now - last_log > std::chrono::milliseconds(400)) {
+            ++probe_logged;
+            last_log = now;
+            const auto& regs = maxwell3d->regs;
+            const auto& ds = maxwell3d->draw_manager.draw_state;
+            LOG_INFO(HW_GPU, "probe draw #{}: {} topology {} vb first {} count {}, rt0 {:#x} {}x{}",
+                     probe_n, is_indexed ? "indexed" : "array", static_cast<u32>(ds.topology),
+                     ds.vertex_buffer.first, ds.vertex_buffer.count, regs.rt[0].Address(),
+                     regs.rt[0].width, regs.rt[0].height);
+            for (u32 stream = 0; stream < 4; ++stream) {
+                const auto& vs = regs.vertex_streams[stream];
+                if (!vs.IsEnabled()) continue;
+                std::array<u32, 8> sample{};
+                gpu_memory->ReadBlockUnsafe(vs.Address(), sample.data(), sizeof(sample));
+                LOG_INFO(HW_GPU, "  stream {} addr {:#x} stride {} sample {:08x}", stream,
+                         vs.Address(), vs.stride, fmt::join(sample, " "));
+            }
+            if (is_indexed) {
+                const auto& ib = ds.index_buffer;
+                const u64 ib_addr = (u64{ib.start_addr_high} << 32) | ib.start_addr_low;
+                std::array<u32, 8> sample{};
+                gpu_memory->ReadBlockUnsafe(ib_addr, sample.data(), sizeof(sample));
+                LOG_INFO(HW_GPU, "  index buf {:#x} fmt {} first {} count {} sample {:08x}",
+                         ib_addr, static_cast<u32>(ib.format), ib.first, ib.count,
+                         fmt::join(sample, " "));
+            }
+            const u64 vs_hash =
+                (u64{regs.pipelines[1].reserved[0] & 0xff} << 32) | regs.pipelines[1].reserved[1];
+            const u64 ps_hash =
+                (u64{regs.pipelines[5].reserved[0] & 0xff} << 32) | regs.pipelines[5].reserved[1];
+            LOG_INFO(HW_GPU, "  vs {:#x} ps {:#x}", vs_hash, ps_hash);
+        }
+    }
     if (static const bool trace = std::getenv("EDEN_NX2_CB24_TRACE") != nullptr; trace) {
         const auto& regs = maxwell3d->regs;
         const u64 vs = (u64{regs.pipelines[1].reserved[0] & 0xff} << 32) | regs.pipelines[1].reserved[1];
