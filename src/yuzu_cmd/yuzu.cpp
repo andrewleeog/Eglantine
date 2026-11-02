@@ -10,6 +10,10 @@
 #include <fstream>
 #include <vector>
 #include <cstdlib>
+#include <exception>
+#ifdef __unix__
+#include <execinfo.h>
+#endif
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -252,6 +256,18 @@ struct SdlState {
 };
 
 extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
+#ifdef __unix__
+    // Dump a backtrace when an uncaught C++ exception (e.g. std::bad_alloc during the
+    // load-to-gameplay transition) terminates the process.
+    if (std::getenv("EDEN_NX2_BT_ON_TERMINATE") != nullptr) {
+        std::set_terminate([] {
+            void* frames[64];
+            const int count = backtrace(frames, 64);
+            backtrace_symbols_fd(frames, count, 2);
+            std::abort();
+        });
+    }
+#endif
 #ifdef _WIN32
     SetUnhandledExceptionFilter(WriteCrashDump);
 #endif

@@ -50,6 +50,10 @@ create_resource("../../dist/eden.bmp" "yuzu_cmd/yuzu_icon.h" "yuzu_icon")
 target_include_directories(yuzu-cmd PRIVATE ${RESOURCES_DIR})
 
 target_link_libraries(yuzu-cmd PRIVATE SDL3::SDL3)
+if(UNIX)
+    # so backtrace_symbols can resolve C++ symbols in terminate-handler traces
+    target_link_options(yuzu-cmd PRIVATE -rdynamic)
+endif()
 
 if(UNIX AND NOT APPLE)
     install(TARGETS yuzu-cmd)
