@@ -1070,6 +1070,14 @@ public:
             {212, &INx2Vi2Session::GetClientAvailability, "GetClientAvailability"},
             {251, &INx2Vi2Session::SucceedQuietly, "BindClientDisplay"},
             {252, &INx2Vi2Session::SucceedQuietly, "UnbindClientDisplay"},
+            // 107/265/267/351: display property queries (name "default" plus an index). The auto
+            // stub already answered them; keep its reply (success, no data) and drop the asserts.
+            {107, &INx2Vi2Session::SucceedQuietly, "Unknown107 (display \"default\")"},
+            {265, &INx2Vi2Session::SucceedQuietly, "Unknown265 (display \"default\", 2)"},
+            {267, &INx2Vi2Session::SucceedQuietly, "Unknown267 (display \"default\", 3)"},
+            {351, &INx2Vi2Session::SucceedQuietly, "Unknown351 (address, 5)"},
+            {261, &INx2Vi2Session::SucceedQuietly, "Unknown261 (display \"default\")"},
+            {271, &INx2Vi2Session::SucceedQuietly, "Unknown271 (display \"default\")"},
             {228, &INx2Vi2Session::CancelClientBuffer, "CancelClientBuffer"},
             {229, &INx2Vi2Session::PresentClientBuffer, "PresentClientBuffer"},
         });
@@ -1157,6 +1165,7 @@ private:
             }
         }
         constexpr u64 AvailableSlots = 0x7fff;
+        NotifyAvailable(u64{w[2]} | (u64{w[3]} << 32));
         TipcReplyWords(ctx, {static_cast<u32>(AvailableSlots),
                              static_cast<u32>(AvailableSlots >> 32), 0, 0, 0, 0});
     }
@@ -1482,7 +1491,7 @@ private:
         const u64 token = u64{w[2]} | (u64{w[3]} << 32);
         if (token != 0 && w[4] < m_notifications.size() * 32 && w[5] < m_notifications.size() * 32 &&
             w[4] != w[5]) {
-            m_clients[token] = w[4];
+            m_clients[token] = {w[4], w[5]};
         }
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
@@ -1494,12 +1503,23 @@ private:
         const u64 token = u64{w[2]} | (u64{w[3]} << 32);
         const auto client = m_clients.find(token);
         if (client != m_clients.end()) {
-            LOG_INFO(Service, "nx2:vi2 client {:#x} retired, notification {}", token, client->second);
-            Notify(client->second);
+            LOG_INFO(Service, "nx2:vi2 client {:#x} retired, notification {}", token, client->second.first);
+            Notify(client->second.first);
             m_clients.erase(client);
         }
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
+    }
+
+    // The "slot available" notification of a presenting client. The console's compositor raises it
+    // once it has taken a buffer; without it a title that waits for it to plan its next frame sits
+    // on the frame it already presented. Every slot is reported free here (0x7fff), so raise it for
+    // each present instead.
+    void NotifyAvailable(u64 token) {
+        const auto client = m_clients.find(token);
+        if (client != m_clients.end()) {
+            Notify(client->second.second);
+        }
     }
 
     bool AnyNotification() const {
@@ -1516,7 +1536,7 @@ private:
         }
     }
 
-    std::map<u64, u32> m_clients; // token -> retire notification index
+    std::map<u64, std::pair<u32, u32>> m_clients; // token -> {retire, available} notification
     std::array<u32, 32> m_notifications{};
     u32 m_display_notification{};
     Kernel::KEvent* m_notification_event{};
