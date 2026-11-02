@@ -838,7 +838,7 @@ struct Values {
 
     Setting<bool> emulate_analog_keyboard{linkage, false, "emulate_analog_keyboard",
                                           Category::Controls};
-    Setting<bool> keyboard_enabled{linkage, false, "keyboard_enabled", Category::Controls};
+    Setting<bool> keyboard_enabled{linkage, true, "keyboard_enabled", Category::Controls};
 
     Setting<bool> debug_pad_enabled{linkage, false, "debug_pad_enabled", Category::Controls};
     ButtonsRaw debug_pad_buttons;
