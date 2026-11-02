@@ -77,16 +77,26 @@ void SyncpointManager::Increment(std::atomic<u32>& syncpoint, std::condition_var
                                  std::list<RegisteredAction>& action_storage) {
     auto new_value{syncpoint.fetch_add(1, std::memory_order_acq_rel) + 1};
 
-    std::scoped_lock lk(guard);
-    auto it = action_storage.begin();
-    while (it != action_storage.end()) {
-        if (it->expected_value > new_value) {
-            break;
+    std::list<RegisteredAction> due;
+    {
+        std::scoped_lock lk(guard);
+        auto it = action_storage.begin();
+        while (it != action_storage.end()) {
+            if (it->expected_value > new_value) {
+                break;
+            }
+            due.splice(due.end(), action_storage, it++);
         }
-        it->action();
-        it = action_storage.erase(it);
+        wait_cv.notify_all();
     }
-    wait_cv.notify_all();
+    // Actions must not run under `guard`: the presentation action composites the frame, and
+    // compositing can block on the display (AcquireNextImage's DRM timeline wait). Holding the
+    // guard through that blocked every other syncpoint user — the fencing thread's Increment and
+    // the guest's RegisterAction (RequestSlotEvent) — a three-way deadlock seen as Donkey Kong
+    // Bananza freezing with presents stopped. Value order is kept: `due` is spliced in order.
+    for (auto& action : due) {
+        action.action();
+    }
 }
 
 void SyncpointManager::Wait(std::atomic<u32>& syncpoint, std::condition_variable& wait_cv,
