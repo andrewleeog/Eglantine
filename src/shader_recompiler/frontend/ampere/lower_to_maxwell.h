@@ -2031,6 +2031,24 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code) {
                  (u64{insn.Bits(76, 4)} << 48) | (u64{1} << 52) | (u64{insn.Bits(80, 1)} << 55));
             break;
         }
+        case 0x234: { // HSETP2 register form: sources like the half ALU ops, control like the
+                      // immediate form (A swizzle 74-75, neg 72, abs 73; B reg 32-39 with
+                      // swizzle 60-61, abs 62, neg 63; combine 69-70, H_AND 71, compare 76-79,
+                      // FTZ 80, Q 81-83, P 84-86, input predicate 87-89, negate 90).
+            const auto a = half_source(0);
+            const HalfSource b{insn.Bits(32, 8), insn.Bits(60, 2),
+                               insn.Bits(62, 1) != 0, insn.Bits(63, 1) != 0};
+            if (b.reg >= 250 && b.reg != 255)
+                return fail(index, "native half compare scratch source");
+            emit(0x5d20000000000000ULL | predicate | insn.Bits(84, 3) | (u64{insn.Bits(81, 3)} << 3) |
+                 (u64{insn.Bits(80, 1)} << 6) | (u64{a.reg} << 8) | (u64{b.reg} << 20) |
+                 (u64{b.swizzle} << 28) | (u64{b.absolute} << 30) | (u64{b.negate} << 31) |
+                 (u64{insn.Bits(76, 4)} << 35) | (u64{insn.Bits(87, 3)} << 39) |
+                 (u64{insn.Bits(90, 1)} << 42) | (u64{a.negate} << 43) | (u64{a.absolute} << 44) |
+                 (u64{insn.Bits(69, 2)} << 45) | (u64{a.swizzle} << 47) |
+                 (u64{insn.Bits(71, 1)} << 49));
+            break;
+        }
         case 0x434: { // HSETP2 with an immediate half pair: A swizzle 74-75 (neg 72, abs 73),
                       // combine 69-70, H_AND 71, compare 76-79, FTZ 80, P/Q 81-86, input 87-90.
             mov_imm(250, insn.words[1]);
