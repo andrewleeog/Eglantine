@@ -500,6 +500,8 @@ void SDLDriver::InitJoystick(SDL_JoystickID joystick_id) {
     battery_state = SDL_GetJoystickPowerInfo(sdl_joystick, &battery_percent);
 
     const auto guid = GetGUID(sdl_joystick);
+    LOG_INFO(Input, "SDL joystick opened: id={} name='{}' guid={} gamepad={}", joystick_id,
+             SDL_GetJoystickName(sdl_joystick), guid.RawString(), sdl_gamecontroller != nullptr);
 
     if (Settings::values.enable_joycon_driver) {
         if (guid.uuid[5] == 0x05 && guid.uuid[4] == 0x7e &&
