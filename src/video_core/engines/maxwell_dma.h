@@ -261,6 +261,10 @@ private:
 
     void CopyBlockLinearToBlockLinear();
 
+    /// Notifies the caches after a software-fallback DMA write, whose guest-memory stores do
+    /// not invalidate the texture cache by themselves (streamed mip data rendered stale).
+    void InvalidateDmaDestination(GPUVAddr dst_addr, u64 size);
+
     void ReleaseSemaphore();
 
     void ConsumeSinkImpl(Core::System& system) override;

@@ -20,6 +20,16 @@
 
 namespace Tegra::Engines {
 
+namespace {
+void LogLargeCopy(const std::string& line) {
+    static const bool enabled = std::getenv("EDEN_NX2_DMA_PROBE") != nullptr;
+    static u32 count = 0;
+    if (enabled && count++ < 200) {
+        LOG_INFO(HW_GPU, "dma probe: {}", line);
+    }
+}
+} // namespace
+
 using namespace Texture;
 
 MaxwellDMA::MaxwellDMA(MemoryManager& memory_manager_)
@@ -114,6 +124,9 @@ void MaxwellDMA::Launch() {
                     regs.offset_out + static_cast<size_t>(line) * regs.pitch_out;
                 memory_manager.CopyBlock(dest_line, source_line, regs.line_length_in);
             }
+            InvalidateDmaDestination(
+                regs.offset_out,
+                static_cast<size_t>(regs.line_count - 1) * regs.pitch_out + regs.line_length_in);
         } else {
             if (!is_src_pitch && is_dst_pitch) {
                 CopyBlockLinearToPitch();
@@ -251,6 +264,7 @@ void MaxwellDMA::CopyBlockLinearToPitch() {
     UnswizzleSubrect(tmp_write_buffer, tmp_read_buffer, bytes_per_pixel, width, height, depth,
                      x_offset, src_params.origin.y, x_elements, regs.line_count, block_height,
                      block_depth, dst_operand.pitch, memory_manager.UsesNativeTiling());
+    InvalidateDmaDestination(dst_operand.address, dst_size);
 }
 
 void MaxwellDMA::CopyPitchToBlockLinear() {
@@ -276,6 +290,10 @@ void MaxwellDMA::CopyPitchToBlockLinear() {
     copy_info.length_y = regs.line_count;
     auto& accelerate = rasterizer->AccessAccelerateDMA();
     if (accelerate.BufferToImage(copy_info, src_operand, dst_operand)) {
+        LogLargeCopy(fmt::format("buffer->image dst={:#x} src={:#x} {}x{}",
+                                 static_cast<u64>(regs.offset_out),
+                                 static_cast<u64>(regs.offset_in), copy_info.length_x,
+                                 copy_info.length_y));
         return;
     }
 
@@ -316,6 +334,7 @@ void MaxwellDMA::CopyPitchToBlockLinear() {
     SwizzleSubrect(tmp_write_buffer, tmp_read_buffer, bytes_per_pixel, width, height, depth,
                    x_offset, dst_params.origin.y, x_elements, regs.line_count, block_height,
                    block_depth, regs.pitch_in, memory_manager.UsesNativeTiling());
+    InvalidateDmaDestination(regs.offset_out, dst_size);
 }
 
 void MaxwellDMA::CopyBlockLinearToBlockLinear() {
@@ -373,6 +392,16 @@ void MaxwellDMA::CopyBlockLinearToBlockLinear() {
     SwizzleSubrect(tmp_write_buffer, intermediate_buffer, bytes_per_pixel, dst_width, dst.height,
                    dst.depth, dst_x_offset, dst.origin.y, x_elements, regs.line_count,
                    dst.block_size.height, dst.block_size.depth, pitch, memory_manager.UsesNativeTiling());
+    InvalidateDmaDestination(regs.offset_out, dst_size);
+}
+
+void MaxwellDMA::InvalidateDmaDestination(GPUVAddr dst_addr, u64 size) {
+    if (size == 0) {
+        return;
+    }
+    if (const auto device = memory_manager.GpuToCpuAddress(dst_addr, size)) {
+        rasterizer->InvalidateRegion(*device, size);
+    }
 }
 
 void MaxwellDMA::ReleaseSemaphore() {
