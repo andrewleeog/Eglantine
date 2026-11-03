@@ -39,6 +39,7 @@ add_executable(tests
     video_core/global_address_tracking.cpp
     video_core/nvn_storage_descriptor.cpp
     video_core/shader_attributes.cpp
+    video_core/indirect_reset.cpp
     input_common/calibration_configuration_job.cpp
 )
 
