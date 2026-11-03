@@ -2009,7 +2009,9 @@ private:
     // nx2-frame-<n>.tga in <dir> (lets hidden test runs check the output; idea from changes.patch).
     void CaptureFrame() {
         static const char* const directory = std::getenv("EDEN_NX2_FRAME_CAPTURE");
-        if (directory == nullptr || (m_presents % 120) != 1 || m_capture_pending->exchange(true)) {
+        static const char* const rate = std::getenv("EDEN_NX2_FRAME_RATE");
+        const u32 rate_n = rate ? static_cast<u32>(std::strtoul(rate, nullptr, 10)) : 120u;
+        if (directory == nullptr || (m_presents % rate_n) != 1 || m_capture_pending->exchange(true)) {
             return;
         }
         const auto layout = Layout::DefaultFrameLayout(1280, 720);

@@ -2922,40 +2922,6 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
             main_exited = true;
             break;
         }
-        case 0x923: { // ISBERD: read the internal stage buffer (map, patch, primitive or attribute)
-            // Ampere (Mesa NAK OpIsberd): offset 24-31, imm 40-55, mem_type 74-75 (U8/U16/B32),
-            // access 76-77 (map/patch/prim/attr), skew 78, output 79. The access and mem_type
-            // values match the Maxwell frontend's Mode and SZ.
-            const u32 offset_reg = insn.Bits(24, 8);
-            const u32 imm_offset = insn.Bits(40, 16);
-            const u32 mem_type = insn.Bits(74, 2);
-            const u32 access = insn.Bits(76, 2);
-            const bool skew = insn.Bits(78, 1) != 0;
-            // The Maxwell frontend reads O as a global load, not the output section.
-            if (insn.Bits(79, 1)) return fail(index, "native stage buffer output read");
-            if (mem_type > 2) return fail(index, "native stage buffer entry read size");
-            // Maxwell's imm is bits 24-31 but bit 31 is also skew, and map reads ignore it.
-            if (imm_offset > 0x7f || (access == 0 && imm_offset != 0))
-                return fail(index, "native stage buffer entry read offset");
-            u32 source = offset_reg;
-            if (skew) {
-                // Add the lane offset here (the frontend's skew: 4 bytes a lane, 1 for map reads)
-                // so bit 31 stays clear.
-                emit(0xf0c8000000000000ULL | predicate | 246);                                        // laneid
-                if (access != 0) emit(0x3848000000000000ULL | predicate | 246 | (u64{246} << 8) | (u64{2} << 20));
-                if (offset_reg != 255)
-                    emit(0x5c10000000000000ULL | predicate | 246 | (u64{246} << 8) | (u64{offset_reg} << 20));
-                source = 246;
-            }
-            // Maxwell ISBERD: dst 0-7, src 8-15, imm 24-30, mode 33-34, sz 36-39.
-            emit(base(0xefd0000000000000ULL) | (u64{source} << 8) | (u64{imm_offset} << 24) |
-                 (u64{access} << 33) | (u64{mem_type} << 36));
-            break;
-        }
-        case 0x927: // ISBEWR: Maxwell has no stage buffer write; dropping it leaves that output
-                    // stale, where rejecting the program would skip every draw that uses it.
-            result.dropped_stage_buffer_writes = true;
-            break;
         default:
             return fail(index, "unsupported native opcode");
         }

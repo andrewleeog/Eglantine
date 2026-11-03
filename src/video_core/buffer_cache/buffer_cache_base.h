@@ -600,7 +600,7 @@ private:
     }
 
     /// Queues a GPU write for download at the next fence, or for a read trap where it isn't read.
-    void TrackGpuWrite(DAddr device_addr, u64 size);
+    void TrackGpuWrite(DAddr device_addr, u64 size, BufferId buffer_id = BufferId{});
 
     /// GPU writes that are not downloaded at fences: trap the guest CPU's next read of their
     /// pages, which flushes them once and adds them to read_back_ranges.

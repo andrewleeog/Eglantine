@@ -1765,11 +1765,11 @@ void BufferCache<P>::MarkWrittenBuffer(BufferId buffer_id, DAddr device_addr, u3
     memory_tracker.MarkRegionAsGpuModified(device_addr, size);
     MarkVertexBuffersStale(device_addr, size);
     gpu_modified_ranges.Add(device_addr, size);
-    TrackGpuWrite(device_addr, size);
+    TrackGpuWrite(device_addr, size, buffer_id);
 }
 
 template <class P>
-void BufferCache<P>::TrackGpuWrite(DAddr device_addr, u64 size) {
+void BufferCache<P>::TrackGpuWrite(DAddr device_addr, u64 size, BufferId buffer_id) {
     if (AsyncBufferDownloads()) {
         uncommitted_gpu_modified_ranges.Add(device_addr, size);
         return;
@@ -1799,7 +1799,9 @@ void BufferCache<P>::TrackGpuWrite(DAddr device_addr, u64 size) {
     }
     if (Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
         Tegra::Nx2MarkGpuWritten(device_addr, size);
-        Nx2NoteListWrite(buffer_id, device_addr, size);
+        if (buffer_id != BufferId{}) {
+            Nx2NoteListWrite(buffer_id, device_addr, size);
+        }
     }
 }
 
