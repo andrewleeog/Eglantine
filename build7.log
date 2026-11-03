@@ -1,0 +1,5 @@
+[0/2] Re-checking globbed directories...
+[1/4] Building CXX object src/video_core/CMakeFiles/video_core.dir/shader_environment.cpp.o
+[2/4] Linking CXX static library src/video_core/libvideo_core.a
+[3/4] Linking CXX executable bin/eden-cli
+/usr/sbin/ld: warning: libfmt.so.11, needed by /usr/lib64/libopenal.so.1, may conflict with libfmt.so.12

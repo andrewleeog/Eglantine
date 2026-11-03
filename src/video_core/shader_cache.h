@@ -67,6 +67,8 @@ public:
     /// @param size Number of bytes of the invalidation
     void InvalidateRegion(VAddr addr, size_t size);
 
+    void InvalidateRegions(std::span<const std::pair<DAddr, size_t>> sequences);
+
     /// @brief Unmarks a memory region as cached and marks it for removal
     /// @param addr Start address of the CPU write operation
     /// @param size Number of bytes of the CPU write operation
@@ -106,6 +108,8 @@ protected:
     Tegra::MaxwellDeviceMemoryManager& device_memory;
 
 private:
+    friend struct ShaderCacheTestAccess;
+
     /// @brief Tries to obtain a cached shader starting in a given address
     /// @note Doesn't check for ranges, the given address has to be the start of the shader
     /// @param addr Start address of the shader, this doesn't cache for region
@@ -155,6 +159,8 @@ private:
     bool IsRejected(VAddr addr);
     /// Remembers the exception being handled as this address's rejection.
     void RememberRejection(VAddr addr);
+    /// Hash of the state task and mesh programs are translated with.
+    u64 MeshStateHash() const;
 
     mutable std::mutex lookup_mutex;
     std::mutex invalidation_mutex;

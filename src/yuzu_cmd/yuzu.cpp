@@ -16,7 +16,9 @@
 #endif
 #include <chrono>
 #include <cstdio>
+#include <csignal>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -40,6 +42,7 @@
 #include "core/core_timing.h"
 #include "core/cpu_manager.h"
 #include "core/crypto/key_manager.h"
+#include "core/file_sys/nup_writer.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/vfs/vfs_real.h"
 #include "core/hle/service/am/applet_manager.h"
@@ -253,7 +256,51 @@ struct SdlState {
     // Must outlive emu_window, which keeps a pointer to it.
     InputCommon::InputSubsystem input_subsystem{};
     std::unique_ptr<EmuWindow_SDL3> emu_window;
+    bool network_initialized{};
 };
+
+static std::atomic_bool pack_nup_cancel{false};
+
+// eden-cli --pack-nup <dump> [<out.nup>]; the output defaults to <dump>.nup next to the dump.
+static bool PackNup(const std::string& source, const std::string& output) {
+    const auto to_path = [](const std::string& utf8) {
+        return std::filesystem::path{std::u8string{utf8.begin(), utf8.end()}};
+    };
+    const auto dump_root = to_path(source);
+    const auto archive =
+        output.empty() ? FileSys::Nup::DefaultArchivePath(dump_root) : to_path(output);
+    std::signal(SIGINT, [](int) { pack_nup_cancel = true; });
+
+    const auto start = std::chrono::steady_clock::now();
+    auto last_report = start;
+    std::string error;
+    const auto result = FileSys::Nup::PackDump(
+        dump_root, archive, {},
+        [&](const FileSys::Nup::PackProgress& p) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_report < std::chrono::seconds(1) && p.files_done != p.files_total) {
+                return;
+            }
+            last_report = now;
+            fmt::print(stderr, "\r{} / {} MiB, {} / {} files", p.bytes_done >> 20,
+                       p.bytes_total >> 20, p.files_done, p.files_total);
+        },
+        &pack_nup_cancel, &error);
+    const auto seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    fmt::print(stderr, "\n");
+    switch (result) {
+    case FileSys::Nup::PackResult::Success:
+        fmt::print(stderr, "Wrote {} in {:.1f} s\n", archive.string(), seconds);
+        return true;
+    case FileSys::Nup::PackResult::Cancelled:
+        fmt::print(stderr, "Cancelled\n");
+        return false;
+    default:
+        fmt::print(stderr, "Packing failed: {}\n", error);
+        return false;
+    }
+}
 
 extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 #ifdef __unix__
@@ -317,8 +364,18 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
     Core::ApplyLaunchParams(lp);
 
+    if (lp.pack_nup_source) {
+        return PackNup(*lp.pack_nup_source, lp.filepath) ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
+    }
+
     if (lp.filepath.empty()) {
         LOG_CRITICAL(Frontend, "Failed to load ROM: No ROM specified");
+        return SDL_APP_FAILURE;
+    }
+
+    state->network_initialized = Network::Init();
+    if (!state->network_initialized) {
+        LOG_CRITICAL(Network, "Failed to initialize room networking");
         return SDL_APP_FAILURE;
     }
 
@@ -505,6 +562,9 @@ static void RunKeyScript(InputCommon::InputSubsystem& input_subsystem) {
 extern "C" SDL_AppResult SDL_AppIterate(void *appstate) {
     SdlState *state = (SdlState *)appstate;
     RunKeyScript(state->input_subsystem);
+    if (state->emu_window) {
+        state->emu_window->ApplyPendingTitle();
+    }
     return state->emu_window && state->emu_window->IsOpen() ? SDL_APP_CONTINUE : SDL_APP_SUCCESS;
 }
 extern "C" SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
@@ -526,7 +586,11 @@ extern "C" void SDL_AppQuit(void *appstate, SDL_AppResult result) {
         void(state->system.Pause());
         state->system.ShutdownMainProcess();
     }
+    const bool network_initialized = state->network_initialized;
     delete state;
+    if (network_initialized) {
+        Network::Shutdown();
+    }
 }
 
 #define VMA_IMPLEMENTATION
