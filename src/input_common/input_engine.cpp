@@ -259,6 +259,19 @@ void InputEngine::ResetAnalogState() {
 
 void InputEngine::TriggerOnButtonChange(const PadIdentifier& identifier, int button, bool value) {
     std::scoped_lock lock{mutex_callback};
+    static u32 probe_count = 0;
+    if (value && probe_count++ < 60) {
+        LOG_INFO(Input, "button change: engine={} button={} guid={} port={} pad={}, callbacks={}",
+                 GetEngineName(), button, identifier.guid.RawString(), identifier.port,
+                 identifier.pad, callback_list.size());
+        for (const auto& poller_pair : callback_list) {
+            const InputIdentifier& poller = poller_pair.second;
+            LOG_INFO(Input, "  poller: guid={} port={} pad={} type={} index={} match={}",
+                     poller.identifier.guid.RawString(), poller.identifier.port,
+                     poller.identifier.pad, static_cast<int>(poller.type), poller.index,
+                     IsInputIdentifierEqual(poller, identifier, EngineInputType::Button, button));
+        }
+    }
     for (const auto& poller_pair : callback_list) {
         const InputIdentifier& poller = poller_pair.second;
         if (!IsInputIdentifierEqual(poller, identifier, EngineInputType::Button, button)) {

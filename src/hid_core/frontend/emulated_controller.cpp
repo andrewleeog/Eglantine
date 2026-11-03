@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string_view>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -98,6 +99,18 @@ Settings::ControllerType EmulatedController::MapNPadToSettingsType(NpadStyleInde
 void EmulatedController::ReloadFromSettings() {
     const auto player_index = Service::HID::NpadIdTypeToIndex(npad_id_type);
     const auto& player = Settings::values.players.GetValue()[player_index];
+
+    if (player_index <= 2) {
+        static std::set<int> logged_players;
+        if (logged_players.insert(player_index).second) {
+            for (std::size_t index = 0; index < player.buttons.size(); ++index) {
+                const auto& param = player.buttons[index];
+                if (param.size() > 0 && index <= 14) {
+                    LOG_INFO(Service_HID, "player{} button{} params: {}", player_index, index, param);
+                }
+            }
+        }
+    }
 
     for (std::size_t index = 0; index < player.buttons.size(); ++index) {
         button_params[index] = Common::ParamPackage(player.buttons[index]);

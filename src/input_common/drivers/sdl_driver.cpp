@@ -510,6 +510,32 @@ void SDLDriver::InitJoystick(SDL_JoystickID joystick_id) {
 
     if (SDL_IsGamepad(joystick_id)) {
         sdl_gamecontroller = SDL_OpenGamepad(joystick_id);
+        // Ground truth: how SDL maps this pad's raw axes/buttons to gamepad controls.
+        if (sdl_gamecontroller) {
+            int binding_count = 0;
+            SDL_GamepadBinding** bindings = SDL_GetGamepadBindings(sdl_gamecontroller, &binding_count);
+            for (int i = 0; bindings && i < binding_count && i < 24; ++i) {
+                const auto& b = *bindings[i];
+                if (b.output_type == SDL_GAMEPAD_BINDTYPE_AXIS) {
+                    if (b.input_type == SDL_GAMEPAD_BINDTYPE_AXIS) {
+                        LOG_INFO(Input, "SDL map: gamepad axis {} <= raw axis {} min {} max {}",
+                                 static_cast<int>(b.output.axis.axis), b.input.axis.axis,
+                                 b.input.axis.axis_min, b.input.axis.axis_max);
+                    }
+                } else if (b.output_type == SDL_GAMEPAD_BINDTYPE_BUTTON) {
+                    if (b.input_type == SDL_GAMEPAD_BINDTYPE_BUTTON) {
+                        LOG_INFO(Input, "SDL map: gamepad button {} <= raw button {}",
+                                 static_cast<int>(b.output.button), b.input.button);
+                    } else if (b.input_type == SDL_GAMEPAD_BINDTYPE_HAT) {
+                        LOG_INFO(Input, "SDL map: gamepad button {} <= hat {} mask {}",
+                                 static_cast<int>(b.output.button), b.input.hat.hat, b.input.hat.hat_mask);
+                    }
+                }
+            }
+            if (bindings) {
+                SDL_free(bindings);
+            }
+        }
     }
 
     if (!sdl_joystick) {
@@ -605,9 +631,27 @@ void SDLDriver::HandleGameControllerEvent(const SDL_Event& event) {
         break;
     }
     case SDL_EVENT_JOYSTICK_BUTTON_DOWN: {
+        LOG_INFO(Input, "SDL joystick button down: which={} button={}", event.jbutton.which,
+                 event.jbutton.button);
         if (const auto joystick = GetSDLJoystickBySDLID(event.jbutton.which)) {
             const PadIdentifier identifier = joystick->GetPadIdentifier();
+            LOG_INFO(Input, "  routed to guid={} port={} pad={}", identifier.guid.RawString(),
+                     identifier.port, identifier.pad);
             SetButton(identifier, event.jbutton.button, true);
+        } else {
+            LOG_INFO(Input, "  no joystick found for which={}", event.jbutton.which);
+        }
+        break;
+    }
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+    case SDL_EVENT_GAMEPAD_BUTTON_UP: {
+        if (const auto joystick = GetSDLJoystickBySDLID(event.gbutton.which)) {
+            const PadIdentifier identifier = joystick->GetPadIdentifier();
+            LOG_INFO(Input, "SDL gamepad button {} : button={} guid={} port={}",
+                     event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ? "down" : "up",
+                     event.gbutton.button, identifier.guid.RawString(), identifier.port);
+            SetButton(identifier, event.gbutton.button,
+                      event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN);
         }
         break;
     }
@@ -621,6 +665,16 @@ void SDLDriver::HandleGameControllerEvent(const SDL_Event& event) {
     case SDL_EVENT_JOYSTICK_AXIS_MOTION: {
         if (const auto joystick = GetSDLJoystickBySDLID(event.jaxis.which)) {
             const PadIdentifier identifier = joystick->GetPadIdentifier();
+            static std::array<s32, 16> last_axis_value{};
+            static u32 axis_logs = 0;
+            const s32 raw = event.jaxis.value;
+            if (axis_logs < 40 && std::abs(raw - last_axis_value[event.jaxis.axis % 16]) > 8000) {
+                ++axis_logs;
+                LOG_INFO(Input, "SDL axis {} = {} ({:.3f}) guid={} port={}", event.jaxis.axis,
+                         raw, event.jaxis.value / 32767.0f, identifier.guid.RawString(),
+                         identifier.port);
+            }
+            last_axis_value[event.jaxis.axis % 16] = raw;
             SetAxis(identifier, event.jaxis.axis, event.jaxis.value / 32767.0f);
         }
         break;
