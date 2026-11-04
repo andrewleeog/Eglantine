@@ -139,6 +139,10 @@ public:
         transitions.clear();
     }
 
+    [[nodiscard]] bool WritesStorage() const noexcept {
+        return writes_storage;
+    }
+
     [[nodiscard]] bool IsBuilt() const noexcept {
         return is_built.load(std::memory_order::relaxed);
     }
@@ -208,6 +212,8 @@ private:
     std::atomic_bool is_built{false};
     bool uses_push_descriptor{false};
     bool uses_descriptor_buffer{false};
+    /// Any stage writes storage buffers/images: fast-draw must not reuse such draws.
+    bool writes_storage{false};
 };
 
 } // namespace Vulkan

@@ -294,6 +294,14 @@ GraphicsPipeline::GraphicsPipeline(
         num_descriptor_entries += NumDescriptorEntries(*info);
     }
     fragment_has_color0_output = stage_infos[NUM_STAGES - 1].stores_frag_color[0];
+    // Fast-draw must not reuse a draw whose pipeline writes storage: the reuse assumes the
+    // draw only consumes the bound state.
+    for (const auto& info : stage_infos) {
+        if (info.storage_buffers_descriptors.size() > 0 || info.image_buffer_descriptors.size() > 0) {
+            writes_storage = true;
+            break;
+        }
+    }
 
     DescriptorLayoutBuilder builder{MakeBuilder(device, stage_infos)};
     uses_push_descriptor = builder.CanUsePushDescriptor();
