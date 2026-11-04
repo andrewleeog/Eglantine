@@ -35,6 +35,7 @@
 #include <fmt/ostream.h>
 
 #include "common/logging.h"
+#include "common/nx2_ram_trim.h"
 #include "common/scm_rev.h"
 #include "common/settings.h"
 #include "common/string_util.h"
@@ -51,6 +52,8 @@
 #include "frontend_common/config.h"
 #include "input_common/drivers/keyboard.h"
 #include "input_common/main.h"
+#include "input_common/input_engine.h"
+#include "common/uuid.h"
 #include "network/network.h"
 #include "sdl_config.h"
 #include "video_core/gpu.h"
@@ -442,6 +445,8 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     Common::Log::Initialize();
     Common::Log::SetColorConsoleBackendEnabled(true);
     Common::Log::Start();
+    // High process priority (Windows; no-op elsewhere).
+    Common::SetNx2HighPriority();
 
     int option_index = 0;
 #ifdef _WIN32
@@ -615,7 +620,50 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 // keys, by SDL scancode, that many seconds after start. Lets hidden test runs drive menus.
 double Nx2KeyClockSeconds(); // emu_window_sdl3.cpp
 
-static void RunKeyScript(InputCommon::InputSubsystem& input_subsystem) {
+// Scripted input must reach titles that only read npads (controllers): MKW's menu ignores
+// the keyboard engine entirely, while DKB reads the HID keyboard. Map the script's keyboard
+// scancode to the SDL gamepad button of the pad bound to player 0 and press that too.
+static void Nx2ScriptPressPad(InputCommon::InputSubsystem &input_subsystem, int code, bool press) {
+    // keyboard scancode -> SDL gamepad button (Switch layout on an Xbox-labelled pad)
+    static const std::unordered_map<int, int> kbd_to_pad{
+        {4, 1}, {22, 0}, {29, 3}, {27, 2}, {9, 9}, {11, 10},
+        {16, 6}, {17, 4}, {31, 11}, {0, 12}, {30, 13}, {5, 14},
+    };
+    const auto mapped = kbd_to_pad.find(code);
+    if (mapped == kbd_to_pad.end()) {
+        return;
+    }
+    InputCommon::InputEngine *sdl = input_subsystem.GetSDLEngine();
+    if (sdl == nullptr) {
+        return;
+    }
+    // Reuse the guid/port/pad from the player 0 A-button binding so the press targets
+    // exactly the device the emulator's config subscribed to.
+    static std::optional<PadIdentifier> pad_id;
+    if (!pad_id) {
+        const auto &buttons =
+            Settings::values.players.GetValue()[0].buttons; // PlayerInput.buttons
+        const Common::ParamPackage param(
+            buttons[static_cast<std::size_t>(Settings::NativeButton::A)]);
+        if (param.Get("engine", "") != "sdl") {
+            return;
+        }
+        Common::UUID guid{param.Get("guid", "")};
+        pad_id = PadIdentifier{
+            .guid = guid,
+            .port = static_cast<std::size_t>(param.Get("port", 0)),
+            .pad = static_cast<std::size_t>(param.Get("pad", 0)),
+        };
+    }
+    try {
+        sdl->ForceButton(*pad_id, mapped->second, press);
+    } catch (const std::exception &e) {
+        // pad not connected/asleep: keyboard delivery still happened above
+        LOG_DEBUG(Frontend, "Key script pad press skipped: {}", e.what());
+    }
+}
+
+void RunKeyScript(InputCommon::InputSubsystem &input_subsystem) {
     struct KeyEvent {
         double seconds; // when frame is 0
         u64 frame;      // "f<frame>:code": after that many presents
@@ -660,12 +708,14 @@ static void RunKeyScript(InputCommon::InputSubsystem& input_subsystem) {
         if (code < 0) {
             input_subsystem.GetKeyboard()->ReleaseKey(static_cast<std::size_t>(-code));
             input_subsystem.GetKeyboard()->ReleaseKeyboardKey(static_cast<std::size_t>(-code));
+            Nx2ScriptPressPad(input_subsystem, -code, false);
         } else {
             input_subsystem.GetKeyboard()->PressKey(static_cast<std::size_t>(code));
             // Also press the HID keyboard key with the same index: NativeKeyboard's letters are
             // numbered like SDL scancodes, and titles that read the keyboard device instead of the
             // pad need this second path. (Bananza's intro reacts to neither yet.)
             input_subsystem.GetKeyboard()->PressKeyboardKey(static_cast<std::size_t>(code));
+            Nx2ScriptPressPad(input_subsystem, code, true);
         }
         ++next;
     }

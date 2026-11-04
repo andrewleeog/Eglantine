@@ -256,6 +256,12 @@ public:
 
 protected:
     void SetButton(const PadIdentifier& identifier, int button, bool value);
+
+public:
+    /// Public passthrough for scripted input injection (key script driving real devices).
+    void ForceButton(const PadIdentifier& identifier, int button, bool value) {
+        SetButton(identifier, button, value);
+    }
     void SetHatButton(const PadIdentifier& identifier, int button, u8 value);
     void SetAxis(const PadIdentifier& identifier, int axis, f32 value);
     void SetBattery(const PadIdentifier& identifier, Common::Input::BatteryLevel value);

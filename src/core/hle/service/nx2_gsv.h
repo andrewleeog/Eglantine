@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "common/alignment.h"
+#include "common/nx2_ram_trim.h"
 #include "common/div_ceil.h"
 #include "common/game_presets.h"
 #include "common/settings.h"
@@ -351,6 +352,8 @@ public:
                     BackSparseWrite(gpu_address, size, data);
                 });
         }
+        // The zero-page trim (Windows; off unless EDEN_NX2_RAM_TRIM is set).
+        Common::StartNx2RamTrim();
     }
 
     ~INx2GpuSession() override {
@@ -1839,8 +1842,14 @@ private:
         const bool mkw_dynamic =
             process.GetProgramId() == Settings::MarioKartWorldProgramId &&
             process.IsMkwDynamicFpsPatchApplied() && Settings::values.mkw_dynamic_fps.GetValue();
+        // Bananza picks its interval from its own timing (2-3 vblanks held it at 20-30 fps under
+        // emulation): pace it at one vblank like the MKW dynamic mode. EDEN_NX2_PACE_ONE=0 undoes it.
+        static const char* const pace_one_env = std::getenv("EDEN_NX2_PACE_ONE");
+        const bool dk_pace_one = process.GetProgramId() == 0x040074A01BF12000ULL &&
+                                 Settings::values.dk_dynamic_fps.GetValue() &&
+                                 !(pace_one_env != nullptr && pace_one_env[0] == '0');
         u32 swap_interval = std::clamp<u32>(timing >> 16, 1, 4);
-        if (mkw_dynamic) {
+        if (mkw_dynamic || dk_pace_one) {
             swap_interval = 1;
         }
         if (forced_interval != 0) {

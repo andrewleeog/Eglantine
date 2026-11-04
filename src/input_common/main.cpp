@@ -491,6 +491,10 @@ void InputSubsystem::PumpEvents() const {
     impl->PumpEvents();
 }
 
+InputEngine* InputSubsystem::GetSDLEngine() {
+    return impl->sdl.get();
+}
+
 std::string GenerateKeyboardParam(int key_code) {
     Common::ParamPackage param;
     param.Set("engine", "keyboard");

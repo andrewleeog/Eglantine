@@ -18,6 +18,7 @@
 #include "common/string_util.h"
 #include "core/arm/exclusive_monitor.h"
 #include "core/core.h"
+#include "core/host_ram_limit.h"
 
 #include "launch_timestamp_cache.h"
 #include "core/core_timing.h"
@@ -419,6 +420,8 @@ struct System::Impl {
 
         // Expose program id to dump sites and other global readers.
         Settings::SetCurrentProgramID(params.program_id);
+        // Cap the working set for titles that need it (Windows; no-op elsewhere).
+        ApplyHostRamLimit(params.program_id);
 
         // Track launch time for frontend launches
         LaunchTimestampCache::SaveLaunchTimestamp(params.program_id);

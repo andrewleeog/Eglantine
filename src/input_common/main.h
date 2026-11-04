@@ -34,6 +34,7 @@ enum Values : int;
 namespace InputCommon {
 class Android;
 class Camera;
+class InputEngine;
 class Keyboard;
 class Mouse;
 class TouchScreen;
@@ -166,6 +167,9 @@ public:
 
     /// Signals SDL driver for new input events
     void PumpEvents() const;
+
+    /// Returns the SDL input engine (nullptr if SDL backend is unavailable), for scripted input.
+    [[nodiscard]] InputEngine* GetSDLEngine();
 
 private:
     struct Impl;

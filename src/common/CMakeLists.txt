@@ -99,6 +99,8 @@ add_library(
     spin_recursive_mutex.h
     scratch_buffer.h
     settings.cpp
+    nx2_ram_trim.cpp
+    nx2_ram_trim.h
     settings.h
     settings_common.cpp
     settings_common.h

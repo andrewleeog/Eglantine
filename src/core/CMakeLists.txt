@@ -18,6 +18,8 @@ add_library(core STATIC
     core.cpp
     core.h
     game_settings.cpp
+    host_ram_limit.cpp
+    host_ram_limit.h
     game_settings.h
     core_timing.cpp
     core_timing.h

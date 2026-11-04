@@ -615,6 +615,10 @@ struct Values {
     SwitchableSetting<bool> mkw_30fps{linkage, false, "mkw_30fps", Category::RendererAdvanced};
     SwitchableSetting<bool> mkw_dynamic_fps{linkage, false, "mkw_dynamic_fps",
                                             Category::RendererAdvanced};
+    // Donkey Kong Bananza: pace its presents at one vblank and patch its clock to follow the
+    // whole frame time (loader/nso.cpp).
+    SwitchableSetting<bool> dk_dynamic_fps{linkage, true, "dk_dynamic_fps",
+                                           Category::RendererAdvanced};
 
     SwitchableSetting<bool> use_reactive_flushing{linkage,
 #ifdef __ANDROID__
