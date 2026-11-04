@@ -663,7 +663,7 @@ static void Nx2ScriptPressPad(InputCommon::InputSubsystem &input_subsystem, int 
     }
 }
 
-void RunKeyScript(InputCommon::InputSubsystem &input_subsystem) {
+static void RunKeyScript(InputCommon::InputSubsystem &input_subsystem) {
     struct KeyEvent {
         double seconds; // when frame is 0
         u64 frame;      // "f<frame>:code": after that many presents
