@@ -240,9 +240,13 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
       fence_manager(*this, gpu, texture_cache, buffer_cache, query_cache, device, scheduler),
       wfi_event(device.GetLogical().CreateEvent()) {
     scheduler.SetQueryCache(query_cache);
+    VideoCommon::GpuSplit::Get().SetIdleHook(
+        [](void* argument) { static_cast<Scheduler*>(argument)->FlushDeferred(); },
+        &scheduler);
 }
 
 RasterizerVulkan::~RasterizerVulkan() {
+    VideoCommon::GpuSplit::Get().SetIdleHook(nullptr, nullptr);
     scheduler.WaitWorker();
     scheduler.Finish();
 }
@@ -252,7 +256,7 @@ RasterizerVulkan::~RasterizerVulkan() {
 bool RasterizerVulkan::TryNx2IndirectReset() {
     static const bool enabled = [] {
         const char* value = std::getenv("EDEN_NX2_RESETFIX");
-        return value && std::string_view{value} == "1";
+        return !value || std::string_view{value} != "0";
     }();
     if (!enabled || !maxwell3d->GetNativeMacroEngine().native_turing ||
         !pipeline_cache.IsIndirectResetShader()) {
@@ -267,8 +271,13 @@ bool RasterizerVulkan::TryNx2IndirectReset() {
         }
         return false;
     };
+    const auto in_gpu_range = [this](u64 address, size_t size) {
+        return size != 0 && address <= (std::numeric_limits<u64>::max)() - size &&
+               gpu_memory->IsWithinGPUAddressRange(address) &&
+               gpu_memory->IsWithinGPUAddressRange(address + size - 1);
+    };
     const auto& cbuf = maxwell3d->state.shader_stages[0].const_buffers[0];
-    if (!cbuf.enabled || cbuf.size < 0x120 ||
+    if (!cbuf.enabled || cbuf.size < 0x120 || !in_gpu_range(cbuf.address, 0x120) ||
         !gpu_memory->IsFullyMappedRange(cbuf.address + 0x110, 16)) {
         return reject("descriptor unavailable");
     }
@@ -280,7 +289,8 @@ bool RasterizerVulkan::TryNx2IndirectReset() {
     const u64 count = draw.vertex_buffer.count;
     const auto range = VideoCommon::IndirectResetRange(list, static_cast<u32>(descriptor[1]),
                                                         first, count);
-    if (!range || !gpu_memory->IsFullyMappedRange(range->begin, range->size)) {
+    if (!range || !in_gpu_range(range->begin, range->size) ||
+        !gpu_memory->IsFullyMappedRange(range->begin, range->size)) {
         return reject("list outside mapped descriptor");
     }
     if (gpu_memory->IsMemoryDirty(range->begin, range->size, VideoCommon::CacheType::BufferCache)) {
@@ -294,7 +304,7 @@ bool RasterizerVulkan::TryNx2IndirectReset() {
         if (!pointer) {
             continue;
         }
-        if (pointer > (std::numeric_limits<u64>::max)() - sizeof(record) ||
+        if (!in_gpu_range(pointer, sizeof(record)) ||
             !gpu_memory->IsFullyMappedRange(pointer, sizeof(record))) {
             return reject("record not mapped");
         }
@@ -646,6 +656,24 @@ void TraceWindowTarget(const Tegra::Engines::Maxwell3D& maxwell3d, Tegra::Memory
 
 void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::Draw};
+    {
+        // A draw's first and count can come from memory a skipped (rejected) compute program
+        // should have written. Past 16M vertices they are garbage: building the quad index
+        // buffer for one threw out of the GPU thread and ended the process (Hyrule Warriors:
+        // Age of Imprisonment, entering a new area), and indexed ones read far out of bounds.
+        const auto& state = maxwell3d->draw_manager.draw_state;
+        const u64 first = is_indexed ? state.index_buffer.first : state.vertex_buffer.first;
+        const u64 count = is_indexed ? state.index_buffer.count : state.vertex_buffer.count;
+        constexpr u64 MaxVertices = u64{1} << 24;
+        if (first + count > MaxVertices) {
+            static std::atomic<u32> skipped{};
+            if (skipped.fetch_add(1, std::memory_order_relaxed) < 16) {
+                LOG_WARNING(HW_GPU, "Draw skipped: {} {} from {} (vertex/index count past {})",
+                            count, is_indexed ? "indices" : "vertices", first, MaxVertices);
+            }
+            return;
+        }
+    }
     TraceWindowTarget(*maxwell3d, *gpu_memory, is_indexed ? "draw-indexed" : "draw",
                       is_indexed ? maxwell3d->draw_manager.draw_state.index_buffer.count
                                  : maxwell3d->draw_manager.draw_state.vertex_buffer.count);
@@ -1250,7 +1278,7 @@ void Vulkan::RasterizerVulkan::DisableGraphicsUniformBuffer(size_t stage, u32 in
 void RasterizerVulkan::FlushAll() {}
 
 void RasterizerVulkan::SubmitNx2ListCopies() {
-    if (buffer_cache.Nx2CopyListPages(scheduler.CurrentTick())) {
+    if (buffer_cache.Nx2CopyListPages(scheduler.CurrentTick()) && !scheduler.DeferFlush()) {
         scheduler.Flush();
     }
 }
@@ -1357,6 +1385,9 @@ void RasterizerVulkan::InvalidateRegion(DAddr addr, u64 size, VideoCommon::Cache
 }
 
 void RasterizerVulkan::InnerInvalidation(std::span<const std::pair<DAddr, std::size_t>> sequences) {
+    if (Settings::values.skip_cpu_inner_invalidation.GetValue()) {
+        return;
+    }
     {
         std::scoped_lock lock{texture_cache.mutex};
         for (const auto& [addr, size] : sequences) {
@@ -1428,7 +1459,11 @@ bool RasterizerVulkan::TryCacheInvalidation(DAddr addr, u64 size) {
     if (addr == 0 || size == 0) return true;
     {
         std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
-        if (buffer_cache.IsRegionGpuModified(addr, size)) return false;
+        // WriteMemory downloads GPU-written bytes elsewhere on the written pages, which only the
+        // GPU thread may do: leave those pages to the fallback.
+        const DAddr page_begin = Common::AlignDown(addr, Core::DEVICE_PAGESIZE);
+        const DAddr page_end = Common::AlignUp(addr + size, Core::DEVICE_PAGESIZE);
+        if (buffer_cache.IsRegionGpuModified(page_begin, page_end - page_begin)) return false;
         texture_cache.WriteMemory(addr, size);
         buffer_cache.WriteMemory(addr, size);
     }
@@ -1447,7 +1482,7 @@ void RasterizerVulkan::UnmapMemory(DAddr addr, u64 size) {
     }
     {
         std::scoped_lock lock{buffer_cache.mutex};
-        buffer_cache.WriteMemory(addr, size);
+        buffer_cache.WriteMemory(addr, size, false);
     }
     pipeline_cache.OnCacheInvalidation(addr, size);
 }
@@ -1525,7 +1560,11 @@ void RasterizerVulkan::FlushCommands() {
         return;
     }
     draw_counter = 0;
-    scheduler.Flush();
+    // Fences with downloads or queries come here right after queueing: ~9,400 a second in
+    // Hyrule Warriors: Age of Imprisonment fights. Batched like the fences themselves.
+    if (!scheduler.DeferFlush()) {
+        scheduler.Flush();
+    }
 }
 
 void RasterizerVulkan::TickFrame() {
@@ -1560,6 +1599,21 @@ bool RasterizerVulkan::AccelerateSurfaceCopy(const Tegra::Engines::Fermi2D::Surf
                                              const Tegra::Engines::Fermi2D::Config& copy_config) {
     std::scoped_lock lock{texture_cache.mutex};
     return texture_cache.BlitImage(dst, src, copy_config);
+}
+
+bool RasterizerVulkan::UsesNvidiaDlss() const {
+    return texture_cache_runtime.UsesNvidiaDlss();
+}
+
+bool RasterizerVulkan::SupportsGameDlssNetwork() const {
+    // Compute pipelines are created 32 threads wide where the device can be told to.
+    return device.IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT);
+}
+
+std::optional<VideoCore::GameDlssProbe> RasterizerVulkan::ProbeGameDlssOutput(
+    const Tegra::Engines::Fermi2D::Surface& src, const Tegra::Engines::Fermi2D::Surface& dst) {
+    std::scoped_lock lock{texture_cache.mutex};
+    return texture_cache.ProbeGameDlssOutput(dst, src);
 }
 
 bool RasterizerVulkan::AccelerateTemporalUpscale(

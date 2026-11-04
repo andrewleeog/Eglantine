@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -12,6 +13,7 @@
 #include <boost/container/small_vector.hpp>
 
 #include "common/alignment.h"
+#include "shader_recompiler/environment.h"
 #include "shader_recompiler/frontend/ir/basic_block.h"
 #include "shader_recompiler/frontend/ir/breadth_first_search.h"
 #include "shader_recompiler/frontend/ir/ir_emitter.h"
@@ -66,6 +68,9 @@ struct StorageInfo {
     /// biased searches of ~5,600 instructions each in a 28,000 instruction compute shader.
     std::unordered_set<const IR::Inst*> biased_exhausted;
     std::unordered_set<const IR::Inst*> unbiased_exhausted;
+    std::unordered_map<const IR::Inst*, small_vector<StorageBufferAddr, 4>> native_candidates;
+    /// A native access with several candidate pointers was left global.
+    bool native_runtime_bounds{};
 };
 
 /// Returns true when the instruction is a global memory instruction
@@ -390,8 +395,14 @@ std::optional<StorageBufferAddr> Track(const IR::Value& value, const Bias* bias,
     return BreadthFirstSearch(value, pred, stop_at_memory);
 }
 
+/// Native programs: every constant buffer pointer the low address can come from, following only
+/// additions, selects and phis. A predicated address assignment becomes a phi whose other input
+/// can point into a different buffer, so the search does not stop at the first pointer.
+small_vector<StorageBufferAddr, 4> NativePointerCandidates(const IR::U32& low_addr,
+                                                           Environment& env) {}
+
 /// Collects the storage buffer used by a global memory instruction and the instruction itself
-void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info) {
+void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info, Environment& env) {
     // NVN puts storage buffers in a specific range, we have to bias towards these addresses to
     // avoid getting false positives
     static constexpr Bias nvn_bias{
@@ -408,6 +419,42 @@ void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info) 
     }
     // First try to find storage buffers in the NVN address
     const IR::U32 low_addr{low_addr_info->value};
+    if (env.IsNativeProgram() && !low_addr.IsImmediate()) {
+        const IR::Inst* const start{low_addr.InstRecursive()};
+        auto it{info.native_candidates.find(start)};
+        if (it == info.native_candidates.end()) {
+            it = info.native_candidates.emplace(start, NativePointerCandidates(low_addr, env)).first;
+        }
+        const auto& candidates{it->second};
+        if (candidates.size() > 1) {
+            // Bind every candidate and keep the access global; the backend picks the buffer at
+            // run time. Rebasing on one of them drops the other path's accesses.
+            for (const StorageBufferAddr& candidate : candidates) {
+                info.set.insert(candidate);
+                if (IsGlobalMemoryWrite(inst)) {
+                    info.writes.insert(candidate);
+                }
+            }
+            info.native_runtime_bounds = true;
+            return;
+        }
+        if (candidates.size() == 1) {
+            // The one pointer the address is built from. The NVN search below only takes 16-byte
+            // aligned slots, so for a pointer at an 8-byte slot it can return a dimension or stride
+            // the address arithmetic reads instead, and the access then lands in the wrong buffer.
+            const StorageBufferAddr storage_buffer{candidates.front()};
+            if (IsGlobalMemoryWrite(inst)) {
+                info.writes.insert(storage_buffer);
+            }
+            info.set.insert(storage_buffer);
+            info.to_replace.push_back(StorageInst{
+                .storage_buffer{storage_buffer},
+                .inst = &inst,
+                .block = &block,
+            });
+            return;
+        }
+    }
     const auto cached_track = [&](const Bias* bias, auto& cache, auto& exhausted) {
         if (low_addr.IsImmediate()) {
             return Track(low_addr, bias, exhausted);
@@ -556,16 +603,18 @@ void Replace(IR::Block& block, IR::Inst& inst, const IR::U32& storage_index,
 }
 } // Anonymous namespace
 
-void GlobalMemoryToStorageBufferPass(IR::Program& program, const HostTranslateInfo& host_info) {
+void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
+                                     const HostTranslateInfo& host_info) {
     StorageInfo info;
     for (IR::Block* const block : program.post_order_blocks) {
         for (IR::Inst& inst : block->Instructions()) {
             if (!IsGlobalMemory(inst)) {
                 continue;
             }
-            CollectStorageBuffers(*block, inst, info);
+            CollectStorageBuffers(*block, inst, info, env);
         }
     }
+    program.info.native_global_bounds |= info.native_runtime_bounds;
     for (const StorageBufferAddr& storage_buffer : info.set) {
         program.info.storage_buffers_descriptors.push_back({
             .cbuf_index = storage_buffer.index,
@@ -587,6 +636,7 @@ void GlobalMemoryToStorageBufferPass(IR::Program& program, const HostTranslateIn
 }
 
 void JoinStorageInfo(Info& base, Info& source) {
+    base.native_global_bounds |= source.native_global_bounds;
     auto& descriptors = base.storage_buffers_descriptors;
     for (auto& desc : source.storage_buffers_descriptors) {
         auto it{std::ranges::find_if(descriptors, [&desc](const auto& existing) {
