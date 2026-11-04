@@ -259,8 +259,9 @@ void InputEngine::ResetAnalogState() {
 
 void InputEngine::TriggerOnButtonChange(const PadIdentifier& identifier, int button, bool value) {
     std::scoped_lock lock{mutex_callback};
+    static const bool input_probe = std::getenv("EDEN_NX2_INPUT_PROBE") != nullptr;
     static u32 probe_count = 0;
-    if (value && probe_count++ < 60) {
+    if (input_probe && value && probe_count++ < 60) {
         LOG_INFO(Input, "button change: engine={} button={} guid={} port={} pad={}, callbacks={}",
                  GetEngineName(), button, identifier.guid.RawString(), identifier.port,
                  identifier.pad, callback_list.size());

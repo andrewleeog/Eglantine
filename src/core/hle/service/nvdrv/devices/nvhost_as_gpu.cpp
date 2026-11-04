@@ -80,6 +80,9 @@ NvResult nvhost_as_gpu::Ioctl1(DeviceFD fd, Ioctl command, std::span<const u8> i
                     },
                     [this](u64 gpu_address, u64 cpu_address, u64 size) {
                         Nx2SparseTile(gpu_address, cpu_address, size);
+                    },
+                    [this](u64 cpu_address, u64 size) {
+                        return Nx2DeviceAddressOf(cpu_address, size);
                     });
             }
             return result;
@@ -227,6 +230,22 @@ void nvhost_as_gpu::Nx2Release(u64 cpu_address, u64 size) {
         smmu.Free(range.address, Common::AlignUp(size, 0x20000));
     });
     LOG_DEBUG(Service_NVDRV, "Switch 2 released backing {:#x}+{:#x}", cpu_address, size);
+}
+
+std::optional<DAddr> nvhost_as_gpu::Nx2DeviceAddressOf(u64 cpu_address, u64 size) {
+    std::scoped_lock lock(mutex);
+    auto it = nx2_device_ranges.upper_bound({cpu_address, size});
+    // Exact and covering entries only: the map is keyed by the map job's (cpu, size) pairs.
+    for (int pass = 0; pass < 2 && it != nx2_device_ranges.begin(); ++pass) {
+        --it;
+        const auto& [range_cpu, range_size] = it->first;
+        if (range_cpu <= cpu_address && cpu_address + size <= range_cpu + range_size &&
+            it->second.address != 0) {
+            return it->second.address + (cpu_address - range_cpu);
+        }
+        it = nx2_device_ranges.upper_bound({cpu_address, size});
+    }
+    return std::nullopt;
 }
 
 void nvhost_as_gpu::Nx2Sparse(u64 gpu_address, u64 size, bool create) {

@@ -234,6 +234,11 @@ private:
     // Switch 2: maps GPU-accessible process memory (CPU range) at a GPU address.
     void Nx2Map(u64 gpu_address, u64 cpu_address, u64 size);
     void Nx2Unmap(u64 gpu_address, u64 size);
+
+    /// The device range a game-memory range is mapped through, if any. Lets services that
+    /// write game memory (the video decoder) find what to invalidate without a map job.
+    std::optional<DAddr> Nx2DeviceAddressOf(u64 cpu_address, u64 size);
+
     NvCore::SessionId nx2_session{};
     struct Nx2DeviceRange {
         DAddr address;

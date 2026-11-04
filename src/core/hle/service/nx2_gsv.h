@@ -2841,8 +2841,23 @@ private:
                               layout.pitch * ((height + 1) / 2));
         }
         // The game samples the image on the GPU: drop the texture cache's copy of the old frame.
-        if (const auto device = Nvidia::Devices::Nx2GpuMemoryRegistry::Get().DeviceAddressOf(address)) {
+        // Prefer the GPU's device ranges (map jobs); the registry's own table only covers
+        // ranges recorded after the map listeners existed.
+        auto device = Nvidia::Devices::Nx2GpuMemoryRegistry::Get().DeviceAddressOfStrict(
+            address, layout.size);
+        if (!device) {
+            device = Nvidia::Devices::Nx2GpuMemoryRegistry::Get().DeviceAddressOf(address);
+        }
+        if (device) {
             system.GPU().InvalidateRegion(*device, layout.size);
+        } else {
+            static u32 miss_logs = 0;
+            if (miss_logs++ < 8) {
+                LOG_WARNING(Service,
+                            "nx2:vdec frame at {:#x} (+{} bytes) has no device range: the texture "
+                            "cache keeps the stale frame",
+                            address, layout.size);
+            }
         }
         return {width, height};
     }

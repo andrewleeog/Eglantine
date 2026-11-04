@@ -48,6 +48,9 @@ public:
     /// A tile of a sparse region shows process memory [cpu_address, +size), or reads zero again
     /// (cpu_address 0).
     using TileListener = std::function<void(u64 gpu_address, u64 cpu_address, u64 size)>;
+    /// Resolves the device range a process-memory range is mapped through (the video decoder's
+    /// invalidations); empty when none covers it.
+    using DeviceOfListener = std::function<std::optional<u64>(u64 cpu_address, u64 size)>;
 
     static Nx2GpuMemoryRegistry& Get() {
         static Nx2GpuMemoryRegistry registry;
@@ -137,9 +140,24 @@ public:
         }
     }
 
+    /// The device range that covers a process-memory range, per the registered listeners.
+    /// Empty when no listener covers it or none of their ranges does.
+    std::optional<u64> DeviceAddressOfStrict(u64 cpu_address, u64 size) {
+        std::scoped_lock lk{mutex};
+        for (auto& [owner, listener] : listeners) {
+            if (listener.device_of) {
+                if (const auto address = listener.device_of(cpu_address, size)) {
+                    return address;
+                }
+            }
+        }
+        return std::nullopt;
+    }
+
     void AddListener(const void* owner, Listener listener, UnmapListener unmap_listener,
                      ReleaseListener release_listener = {}, SparseListener sparse_listener = {},
-                     BackListener back_listener = {}, TileListener tile_listener = {}) {
+                     BackListener back_listener = {}, TileListener tile_listener = {},
+                     DeviceOfListener device_of_listener = {}) {
         std::scoped_lock lk{mutex};
         for (const auto& m : mappings) {
             listener(m.gpu_address, m.cpu_address, m.size);
@@ -153,7 +171,8 @@ public:
                                                     std::move(release_listener),
                                                     std::move(sparse_listener),
                                                     std::move(back_listener),
-                                                    std::move(tile_listener)});
+                                                    std::move(tile_listener),
+                                                    std::move(device_of_listener)});
     }
 
     void RemoveListener(const void* owner) {
@@ -261,6 +280,7 @@ private:
         SparseListener sparse;
         BackListener back;
         TileListener tile;
+        DeviceOfListener device_of;
     };
 
     // Drops [gpu_address, +size) from the recorded mappings, keeping the parts outside it.
