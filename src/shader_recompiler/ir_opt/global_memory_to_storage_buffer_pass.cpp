@@ -63,11 +63,6 @@ struct StorageInfo {
     /// instructions (the IR does not change while storage buffers are collected).
     std::unordered_map<const IR::Inst*, std::optional<StorageBufferAddr>> biased_tracks;
     std::unordered_map<const IR::Inst*, std::optional<StorageBufferAddr>> unbiased_tracks;
-    /// Instructions from which a search with (or without) the bias cannot succeed. Each search
-    /// from a new address otherwise walked again what failed searches had walked: 725 failing
-    /// biased searches of ~5,600 instructions each in a 28,000 instruction compute shader.
-    std::unordered_set<const IR::Inst*> biased_exhausted;
-    std::unordered_set<const IR::Inst*> unbiased_exhausted;
     std::unordered_map<const IR::Inst*, small_vector<StorageBufferAddr, 4>> native_candidates;
     /// A native access with several candidate pointers was left global.
     bool native_runtime_bounds{};
@@ -350,8 +345,7 @@ std::optional<LowAddrInfo> TrackLowAddress(IR::Inst* inst) {
 }
 
 /// Tries to track the storage buffer address used by a global memory instruction
-std::optional<StorageBufferAddr> Track(const IR::Value& value, const Bias* bias,
-                                       std::unordered_set<const IR::Inst*>& exhausted) {
+std::optional<StorageBufferAddr> Track(const IR::Value& value, const Bias* bias) {
     const auto pred{[bias](const IR::Inst* inst) -> std::optional<StorageBufferAddr> {
         if (inst->GetOpcode() != IR::Opcode::GetCbufU32 &&
             inst->GetOpcode() != IR::Opcode::GetCbufU32x2) {
@@ -399,7 +393,54 @@ std::optional<StorageBufferAddr> Track(const IR::Value& value, const Bias* bias,
 /// additions, selects and phis. A predicated address assignment becomes a phi whose other input
 /// can point into a different buffer, so the search does not stop at the first pointer.
 small_vector<StorageBufferAddr, 4> NativePointerCandidates(const IR::U32& low_addr,
-                                                           Environment& env) {}
+                                                           Environment& env) {
+    small_vector<StorageBufferAddr, 4> candidates;
+    small_vector<const IR::Inst*, 16> pending{low_addr.InstRecursive()};
+    std::unordered_set<const IR::Inst*> visited{pending.front()};
+    const auto enqueue = [&](const IR::Value& value) {
+        if (!value.IsImmediate() && visited.insert(value.InstRecursive()).second) {
+            pending.push_back(value.InstRecursive());
+        }
+    };
+    for (size_t next = 0; next < pending.size(); ++next) {
+        const IR::Inst* const inst{pending[next]};
+        switch (inst->GetOpcode()) {
+        case IR::Opcode::GetCbufU32:
+        case IR::Opcode::GetCbufU32x2: {
+            const IR::Value index{inst->Arg(0)};
+            const IR::Value offset{inst->Arg(1)};
+            if (!index.IsImmediate() || !offset.IsImmediate()) {
+                break;
+            }
+            const StorageBufferAddr pointer{.index = index.U32(), .offset = offset.U32()};
+            if (Common::IsAligned(pointer.offset, 8) &&
+                std::ranges::find(candidates, pointer) == candidates.end() &&
+                env.IsCbufStorageBufferPointer(pointer.index, pointer.offset)) {
+                candidates.push_back(pointer);
+            }
+            break;
+        }
+        case IR::Opcode::IAdd32:
+        case IR::Opcode::Phi:
+            for (size_t arg = inst->NumArgs(); arg--;) {
+                enqueue(inst->Arg(arg));
+            }
+            break;
+        case IR::Opcode::SelectU32:
+            enqueue(inst->Arg(1));
+            enqueue(inst->Arg(2));
+            break;
+        case IR::Opcode::CompositeExtractU32x2:
+            if (inst->Arg(1).IsImmediate() && inst->Arg(1).U32() == 0) {
+                enqueue(inst->Arg(0));
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    return candidates;
+}
 
 /// Collects the storage buffer used by a global memory instruction and the instruction itself
 void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info, Environment& env) {
@@ -455,22 +496,22 @@ void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info, 
             return;
         }
     }
-    const auto cached_track = [&](const Bias* bias, auto& cache, auto& exhausted) {
+    const auto cached_track = [&](const Bias* bias, auto& cache) {
         if (low_addr.IsImmediate()) {
-            return Track(low_addr, bias, exhausted);
+            return Track(low_addr, bias);
         }
         const IR::Inst* const start{low_addr.InstRecursive()};
         if (const auto it = cache.find(start); it != cache.end()) {
             return it->second;
         }
-        const std::optional<StorageBufferAddr> result{Track(low_addr, bias, exhausted)};
+        const std::optional<StorageBufferAddr> result{Track(low_addr, bias)};
         cache.emplace(start, result);
         return result;
     };
-    std::optional<StorageBufferAddr> storage_buffer{cached_track(&nvn_bias, info.biased_tracks, info.biased_exhausted)};
+    std::optional<StorageBufferAddr> storage_buffer{cached_track(&nvn_bias, info.biased_tracks)};
     if (!storage_buffer) {
         // If it fails, track without a bias
-        storage_buffer = cached_track(nullptr, info.unbiased_tracks, info.unbiased_exhausted);
+        storage_buffer = cached_track(nullptr, info.unbiased_tracks);
         if (!storage_buffer) {
             // If that also fails, use NVN fallbacks
             LOG_WARNING(Shader, "Storage buffer failed to track, using global memory fallbacks");
