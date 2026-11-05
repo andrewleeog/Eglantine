@@ -153,16 +153,11 @@ GPUVAddr MemoryManager::PageTableOp(GPUVAddr gpu_addr, [[maybe_unused]] DAddr de
         remaining_size -= page_size;
     }
     flush_modified();
-<<<<<<< HEAD
-    kind_map.Map(gpu_addr, gpu_addr + size, kind);
-    flush_modified();
-=======
     {
         std::unique_lock<std::mutex> lock(guard);
         kind_map.Map(gpu_addr, gpu_addr + size, kind);
     }
     map_serial.fetch_add(1, std::memory_order_release);
->>>>>>> 7c0b5e791e (video_core: cache MaxContinuousRange until the GPU page table changes (#146))
     return gpu_addr;
 }
 
