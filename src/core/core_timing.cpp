@@ -5,8 +5,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <tuple>
 #include "common/cpu_features.h"
 #include "common/cpu_features.h"
@@ -86,7 +88,21 @@ void CoreTiming::Initialize(std::function<void()>&& on_thread_init_) {
                         // There are more events left in the queue, wait until the next event.
                         auto const wait_time = *next_time - GetGlobalTimeNs().count();
                         if (wait_time > 0) {
-                            event.WaitFor(std::chrono::nanoseconds(wait_time));
+                            // Guest threads sleep through this timer for every wait/timeout; the
+                            // condvar wake costs tens of microseconds each. EDEN_NX2_TIMING_SPIN_US
+                            // spins instead for waits shorter than that (0 = plain condvar wait).
+                            static const s64 spin_us = [] {
+                                const char* text = std::getenv("EDEN_NX2_TIMING_SPIN_US");
+                                return text ? std::strtoll(text, nullptr, 10) : 0LL;
+                            }();
+                            if (spin_us > 0 && wait_time <= spin_us * 1000LL) {
+                                const s64 deadline = GetGlobalTimeNs().count() + wait_time;
+                                while (GetGlobalTimeNs().count() < deadline) {
+                                    std::this_thread::yield();
+                                }
+                            } else {
+                                event.WaitFor(std::chrono::nanoseconds(wait_time));
+                            }
                         }
                     } else {
                         // Queue is empty, wait until another event is scheduled and signals us to
