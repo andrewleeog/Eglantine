@@ -100,8 +100,12 @@ void CoreTiming::Initialize(std::function<void()>&& on_thread_init_) {
                                 while (GetGlobalTimeNs().count() < deadline) {
                                     // yield() is a syscall: spinning with it flooded the kernel
                                     // scheduler (53% of samples in sched code). Pause in user mode.
+                                    // GetTimeNS is a fenced RDTSC (expensive); read it every 64
+                                    // pauses or the timer thread spends ~30% of a core in the clock.
 #if defined(__x86_64__) || defined(__i386__)
-                                    __builtin_ia32_pause();
+                                    for (int p = 0; p < 64; ++p) {
+                                        __builtin_ia32_pause();
+                                    }
 #else
                                     std::this_thread::yield();
 #endif
