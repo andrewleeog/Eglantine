@@ -98,7 +98,13 @@ void CoreTiming::Initialize(std::function<void()>&& on_thread_init_) {
                             if (spin_us > 0 && wait_time <= spin_us * 1000LL) {
                                 const s64 deadline = GetGlobalTimeNs().count() + wait_time;
                                 while (GetGlobalTimeNs().count() < deadline) {
+                                    // yield() is a syscall: spinning with it flooded the kernel
+                                    // scheduler (53% of samples in sched code). Pause in user mode.
+#if defined(__x86_64__) || defined(__i386__)
+                                    __builtin_ia32_pause();
+#else
                                     std::this_thread::yield();
+#endif
                                 }
                             } else {
                                 event.WaitFor(std::chrono::nanoseconds(wait_time));

@@ -236,7 +236,12 @@ void PhysicalCore::Idle() {
         const auto deadline = std::chrono::steady_clock::now() + spin;
         while (!m_is_interrupted.load(std::memory_order_acquire) &&
                std::chrono::steady_clock::now() < deadline) {
+            // yield() is a syscall: pause in user mode like CoreTiming's spin.
+#if defined(__x86_64__) || defined(__i386__)
+            __builtin_ia32_pause();
+#else
             std::this_thread::yield();
+#endif
         }
     }
     std::unique_lock lk{m_guard};
