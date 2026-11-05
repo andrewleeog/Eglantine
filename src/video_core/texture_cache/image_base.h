@@ -68,6 +68,11 @@ struct ImageViewInfo;
 struct AliasedImage {
     std::vector<ImageCopy> copies;
     ImageId id;
+    // The modification tick of the aliased image when we last copied its contents into the
+    // owner. Copying again while nothing changed is wasted GPU work; DKB's render-target
+    // and shadow chains ping-pong ticks every frame, which replayed a vkCmdCopyImage2 with
+    // four barriers per alias per frame.
+    u64 synced_tick = 0;
 };
 
 struct NullImageParams {};

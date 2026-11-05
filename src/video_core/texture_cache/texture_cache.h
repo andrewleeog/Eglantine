@@ -3460,12 +3460,12 @@ void TextureCache<P>::MarkModification(ImageBase& image) noexcept {
 
 template <class P>
 void TextureCache<P>::SynchronizeAliases(ImageId image_id) {
-    boost::container::small_vector<const AliasedImage*, 8> aliased_images;
+    boost::container::small_vector<AliasedImage*, 8> aliased_images;
     Image& image = slot_images[image_id];
     bool any_rescaled = True(image.flags & ImageFlagBits::Rescaled);
     bool any_modified = True(image.flags & ImageFlagBits::GpuModified);
     u64 most_recent_tick = image.modification_tick;
-    for (const AliasedImage& aliased : image.aliased_images) {
+    for (AliasedImage& aliased : image.aliased_images) {
         ImageBase& aliased_image = slot_images[aliased.id];
         if (image.modification_tick < aliased_image.modification_tick) {
             most_recent_tick = (std::max)(most_recent_tick, aliased_image.modification_tick);
@@ -3495,12 +3495,17 @@ void TextureCache<P>::SynchronizeAliases(ImageId image_id) {
         return lhs_image.modification_tick < rhs_image.modification_tick;
     });
     const auto& resolution = Settings::values.resolution_info;
-    for (const AliasedImage* const aliased : aliased_images) {
+    for (AliasedImage* const aliased : aliased_images) {
+        Image& aliased_image = slot_images[aliased->id];
+        // Skip the copy when the alias hasn't changed since we last took its contents.
+        if (aliased_image.modification_tick <= aliased->synced_tick) {
+            continue;
+        }
+        aliased->synced_tick = aliased_image.modification_tick;
         if (!resolution.active || !any_rescaled) {
             CopyImage(image_id, aliased->id, aliased->copies);
             continue;
         }
-        Image& aliased_image = slot_images[aliased->id];
         if (!can_rescale) {
             ScaleDown(aliased_image);
             CopyImage(image_id, aliased->id, aliased->copies);
