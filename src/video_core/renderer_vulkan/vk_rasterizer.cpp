@@ -296,8 +296,7 @@ void RasterizerVulkan::NoteResolvedDraw(GraphicsPipeline* pipeline, bool is_inde
         topology == Maxwell::PrimitiveTopology::Quads ||
         topology == Maxwell::PrimitiveTopology::QuadStrip ||
         buffer_cache_runtime.AnyVertexRepacked() || !scheduler.IsRenderPassActive() ||
-        scheduler.BoundGraphicsPipeline() != pipeline ||
-        !VideoCommon::GpuSplit::OnBackThread()) {
+        scheduler.BoundGraphicsPipeline() != pipeline) {
         return;
     }
     reusable_draw = ReusableDraw{
