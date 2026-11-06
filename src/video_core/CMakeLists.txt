@@ -112,6 +112,7 @@ add_library(video_core STATIC
     native_query_trace.h
     nx2.h
     nx2_fast_draw.h
+    nx2_draw_budget.h
     nx2_profile.h
     present.h
     pte_kind.h

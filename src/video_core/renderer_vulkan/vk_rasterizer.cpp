@@ -57,6 +57,7 @@
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/nx2_fast_draw.h"
+#include "video_core/nx2_draw_budget.h"
 #include "video_core/nx2_profile.h"
 
 namespace Vulkan {
@@ -1692,6 +1693,7 @@ void RasterizerVulkan::TickFrame() {
     if (VideoCommon::Nx2FastDraw::g_enabled) [[unlikely]] {
         ReportFastDraws();
     }
+    VideoCommon::Nx2DrawBudget::BeginFrame();
     draw_counter = 0;
     pipeline_cache.TickFrame();
     guest_descriptor_queue.TickFrame();

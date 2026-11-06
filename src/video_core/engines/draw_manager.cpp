@@ -9,6 +9,7 @@
 #include "common/settings.h"
 #include "video_core/dirty_flags.h"
 #include "video_core/engines/maxwell_3d.h"
+#include "video_core/nx2_draw_budget.h"
 #include "video_core/rasterizer_interface.h"
 
 namespace Tegra::Engines {
@@ -318,6 +319,17 @@ void Maxwell3D::DrawManager::ProcessDraw(Maxwell3D& maxwell3d, bool draw_indexed
     LOG_TRACE(HW_GPU, "called, topology={}, count={}", draw_state.topology, draw_indexed ? draw_state.index_buffer.count : draw_state.vertex_buffer.count);
     UpdateTopology(maxwell3d);
     if (maxwell3d.ShouldExecute()) {
+        // Frame-skip: on skipped frames the draws are not recorded and the last composited
+        // image stays up; the game's simulation and its registers keep running normally.
+        if (VideoCommon::Nx2DrawBudget::g_frame_skipped.load(std::memory_order_relaxed)) {
+            return;
+        }
+        // Draw budget: past the per-frame draw limit, tiny draws (particles, small props)
+        // are skipped; the terrain/characters pass the vertex-count threshold.
+        if (!VideoCommon::Nx2DrawBudget::AllowDraw(draw_state.draw_element_count *
+                                                   (std::max)(instance_count, 1u))) {
+            return;
+        }
         maxwell3d.rasterizer->Draw(draw_indexed, instance_count);
     }
 }
