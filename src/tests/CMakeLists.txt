@@ -38,6 +38,7 @@ add_executable(tests
     video_core/native_macro_fifo.cpp
     video_core/uniform_stream_reuse.cpp
     video_core/shader_invalidation.cpp
+    video_core/stale_pages.cpp
     video_core/descriptor_table.cpp
     video_core/ampere_f2i.cpp
     video_core/ampere_geometry.cpp
