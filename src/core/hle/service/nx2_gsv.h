@@ -2875,9 +2875,21 @@ private:
             Tegra::Texture::SwizzleTexture(m_tiled, bytes, 4, static_cast<u32>(layout.pitch / 4),
                                            layout.height, 1, 4, 0, 1, true);
             memory.WriteBlock(address, m_tiled.data(), m_tiled.size());
-            if (const auto device =
-                    Nvidia::Devices::Nx2GpuMemoryRegistry::Get().DeviceAddressOf(address)) {
-                system.GPU().InvalidateRegion(*device, m_tiled.size());
+            auto tiled_device = Nvidia::Devices::Nx2GpuMemoryRegistry::Get().DeviceAddressOfStrict(
+                address, m_tiled.size());
+            if (!tiled_device) {
+                tiled_device = Nvidia::Devices::Nx2GpuMemoryRegistry::Get().DeviceAddressOf(address);
+            }
+            if (tiled_device) {
+                system.GPU().InvalidateRegion(*tiled_device, m_tiled.size());
+            } else {
+                static u32 tiled_miss_logs = 0;
+                if (tiled_miss_logs++ < 8) {
+                    LOG_WARNING(Service,
+                                "nx2:vdec block-linear frame at {:#x} (+{} bytes) has no device "
+                                "range: the texture cache keeps the stale frame",
+                                address, m_tiled.size());
+                }
             }
             return {width, height};
         }
