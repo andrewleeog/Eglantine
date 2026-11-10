@@ -299,8 +299,14 @@ void nvhost_as_gpu::Nx2BackSparse(u64 gpu_address, u64 cpu_address, u64 size) {
     if (size > region_size || gpu_address - start > region_size - size) {
         return;
     }
-    system.Host1x().MemoryManager().Map(device_address + (gpu_address - start), cpu_address, size,
-                                        session->asid, true);
+    const DAddr block_device = device_address + (gpu_address - start);
+    system.Host1x().MemoryManager().Map(block_device, cpu_address, size, session->asid, true);
+    // Record it like a MapBufferEx job: Nx2DeviceAddressOf only resolves recorded ranges, and a
+    // backed sparse block the vdec streams a texture into is exactly what it must resolve -
+    // without this the texture cache keeps the stale (black) frame.
+    nx2_device_ranges[{cpu_address, size}] = Nx2DeviceRange{
+        .address = block_device, .heap = false, .shared = false, .asid = session->asid.id};
+    Nx2GpuMemoryRegistry::Get().RecordDeviceRange(cpu_address, size, block_device);
 }
 
 void nvhost_as_gpu::Nx2SparseTile(u64 gpu_address, u64 cpu_address, u64 size) {
