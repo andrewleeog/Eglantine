@@ -625,6 +625,13 @@ void SDLDriver::HandleGameControllerEvent(const SDL_Event& event) {
     switch (event.type) {
     case SDL_EVENT_JOYSTICK_BUTTON_UP: {
         if (const auto joystick = GetSDLJoystickBySDLID(event.jbutton.which)) {
+            // A gamepad emits every button a second time with the standardized gamepad index.
+            // Processing both would fire the press twice under two different indices, and on
+            // pads whose raw order differs from the gamepad order (DualSense: raw 0 is square,
+            // gamepad 0 is cross) that means two conflicting bindings per press.
+            if (joystick->GetSDLGameController()) {
+                break;
+            }
             const PadIdentifier identifier = joystick->GetPadIdentifier();
             SetButton(identifier, event.jbutton.button, false);
         }
@@ -634,6 +641,9 @@ void SDLDriver::HandleGameControllerEvent(const SDL_Event& event) {
         LOG_INFO(Input, "SDL joystick button down: which={} button={}", event.jbutton.which,
                  event.jbutton.button);
         if (const auto joystick = GetSDLJoystickBySDLID(event.jbutton.which)) {
+            if (joystick->GetSDLGameController()) {
+                break;
+            }
             const PadIdentifier identifier = joystick->GetPadIdentifier();
             LOG_INFO(Input, "  routed to guid={} port={} pad={}", identifier.guid.RawString(),
                      identifier.port, identifier.pad);
@@ -657,6 +667,10 @@ void SDLDriver::HandleGameControllerEvent(const SDL_Event& event) {
     }
     case SDL_EVENT_JOYSTICK_HAT_MOTION: {
         if (const auto joystick = GetSDLJoystickBySDLID(event.jhat.which)) {
+            // The gamepad reports the hat as its d-pad buttons (gamepad 11-14).
+            if (joystick->GetSDLGameController()) {
+                break;
+            }
             const PadIdentifier identifier = joystick->GetPadIdentifier();
             SetHatButton(identifier, event.jhat.hat, event.jhat.value);
         }
