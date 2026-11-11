@@ -41,7 +41,7 @@ Result IFile::Read(
         static std::atomic<u32> logged{};
         if (true &&
             logged.fetch_add(1) < 5000) {
-            LOG_INFO(Service_FS, "FSPROBE dest={:#x} off={:#x} size={}",
+            LOG_INFO(Service_FS, "FSPROBE opt={} dest={:#x} off={:#x} size={}", option.value,
                      static_cast<u64>(reinterpret_cast<uintptr_t>(out_buffer.data())), offset, size);
         }
     }

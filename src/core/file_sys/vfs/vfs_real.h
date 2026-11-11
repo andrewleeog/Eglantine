@@ -25,6 +25,34 @@ struct FileReference : public Common::IntrusiveListBaseNode<FileReference> {
 };
 
 class RealVfsFile;
+
+/// Serves a .zs member decompressed: Switch 2 titles read these through the loader, which decodes
+/// them, so an extracted dump has to decode them here or the guest reads zstd bytes.
+class ZsVfsFile final : public VfsFile {
+public:
+    explicit ZsVfsFile(VirtualFile inner);
+    ~ZsVfsFile() override;
+
+    std::string GetName() const override;
+    std::size_t GetSize() const override;
+    bool Resize(std::size_t new_size) override;
+    VirtualDir GetContainingDirectory() const override;
+    bool IsWritable() const override;
+    bool IsReadable() const override;
+    std::size_t Read(u8* data, std::size_t length, std::size_t offset = 0) const override;
+    std::size_t Write(const u8* data, std::size_t length, std::size_t offset = 0) override;
+    bool Rename(std::string_view new_name) override;
+    std::string GetFullPath() const override;
+
+private:
+    void EnsureDecoded() const;
+
+    VirtualFile inner;
+    mutable std::vector<u8> decoded;
+    mutable bool decode_failed{};
+    mutable bool decoded_once{};
+};
+
 class RealVfsDirectory;
 
 class RealVfsFilesystem : public VfsFilesystem {

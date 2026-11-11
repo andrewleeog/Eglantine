@@ -268,6 +268,10 @@ struct GPU::Impl {
         return renderer->ReadRasterizer()->OnCPUWrite(addr, size);
     }
 
+    bool HasRasterizer() const {
+        return gpu_thread.HasRasterizer();
+    }
+
     /// Notify rasterizer that any caches of the specified region should be flushed and invalidated
     void FlushAndInvalidateRegion(DAddr addr, u64 size) {
         gpu_thread.FlushAndInvalidateRegion(addr, size, is_async);
@@ -566,6 +570,10 @@ void GPU::RunInOrder(std::function<void()>&& func) {
 
 void GPU::MapInOrder(std::function<void()>&& func) {
     impl->MapInOrder(std::move(func));
+}
+
+bool GPU::HasRasterizer() {
+    return impl->HasRasterizer();
 }
 
 void GPU::InvalidateRegion(DAddr addr, u64 size, bool preserve_gpu_writes) {

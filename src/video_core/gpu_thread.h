@@ -145,6 +145,12 @@ private:
 
     Core::System& system;
     VideoCore::RasterizerInterface* rasterizer = nullptr;
+
+public:
+    /// False until the renderer hands the thread its rasterizer (early boot reads).
+    [[nodiscard]] bool HasRasterizer() const {
+        return rasterizer != nullptr;
+    }
     SynchState state;
     std::jthread thread;
 };

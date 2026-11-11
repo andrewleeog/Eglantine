@@ -14,6 +14,8 @@
 #include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "core/file_sys/vfs/vfs.h"
+#include <zstd.h>
+
 #include "core/file_sys/vfs/vfs_real.h"
 
 // For FileTimeStampRaw
@@ -113,6 +115,94 @@ VfsEntryType RealVfsFilesystem::GetEntryType(std::string_view path_) const {
     return VfsEntryType::File;
 }
 
+
+ZsVfsFile::ZsVfsFile(VirtualFile inner_) : inner{std::move(inner_)} {}
+ZsVfsFile::~ZsVfsFile() = default;
+
+std::string ZsVfsFile::GetName() const {
+    return inner->GetName();
+}
+
+std::string ZsVfsFile::GetFullPath() const {
+    return inner->GetFullPath();
+}
+
+std::size_t ZsVfsFile::GetSize() const {
+    EnsureDecoded();
+    return decoded.size();
+}
+
+bool ZsVfsFile::Resize(std::size_t) {
+    return false;
+}
+
+VirtualDir ZsVfsFile::GetContainingDirectory() const {
+    return inner->GetContainingDirectory();
+}
+
+bool ZsVfsFile::IsWritable() const {
+    return false;
+}
+
+bool ZsVfsFile::IsReadable() const {
+    return true;
+}
+
+void ZsVfsFile::EnsureDecoded() const {
+    if (decoded_once) {
+        return;
+    }
+    decoded_once = true;
+    const auto compressed = inner->ReadAllBytes();
+    if (compressed.empty()) {
+        decode_failed = true;
+        return;
+    }
+    // Streaming, so multi-frame members decode whole rather than stopping at the first frame.
+    ZSTD_DStream* stream = ZSTD_createDStream();
+    if (stream == nullptr) {
+        decode_failed = true;
+        return;
+    }
+    ZSTD_initDStream(stream);
+    ZSTD_inBuffer in{compressed.data(), compressed.size(), 0};
+    std::vector<u8> out(ZSTD_DStreamOutSize());
+    while (in.pos < in.size) {
+        ZSTD_outBuffer ob{out.data(), out.size(), 0};
+        const auto result = ZSTD_decompressStream(stream, &ob, &in);
+        if (ZSTD_isError(result)) {
+            decode_failed = true;
+            break;
+        }
+        decoded.insert(decoded.end(), out.data(), out.data() + ob.pos);
+        if (result == 0 && in.pos >= in.size) {
+            break;
+        }
+        if (ob.pos == 0 && in.pos >= in.size) {
+            break;
+        }
+    }
+    ZSTD_freeDStream(stream);
+}
+
+std::size_t ZsVfsFile::Read(u8* data, std::size_t length, std::size_t offset) const {
+    EnsureDecoded();
+    if (offset >= decoded.size()) {
+        return 0;
+    }
+    const std::size_t amount = std::min(length, decoded.size() - offset);
+    std::memcpy(data, decoded.data() + offset, amount);
+    return amount;
+}
+
+std::size_t ZsVfsFile::Write(const u8*, std::size_t, std::size_t) {
+    return 0;
+}
+
+bool ZsVfsFile::Rename(std::string_view) {
+    return true;
+}
+
 VirtualFile RealVfsFilesystem::OpenFileFromEntry(std::string_view path_, std::optional<u64> size,
                                                  OpenMode perms) {
     const auto path = FS::SanitizePath(path_, FS::DirectorySeparator::PlatformDefault);
@@ -132,6 +222,10 @@ VirtualFile RealVfsFilesystem::OpenFileFromEntry(std::string_view path_, std::op
     this->InsertReferenceIntoListLocked(*reference);
 
     auto file = std::make_shared<RealVfsFile>(*this, std::move(reference), path, perms, size);
+    if (path.ends_with(".zs")) {
+        // Served decompressed; not cached, since each opened member decodes independently.
+        return std::make_shared<ZsVfsFile>(file);
+    }
     cache[path] = file;
 
     return file;

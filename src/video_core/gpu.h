@@ -261,6 +261,9 @@ public:
     /// submitted later (with the GPU split, on its front rather than its back).
     void MapInOrder(std::function<void()>&& func);
 
+    /// False while the renderer has no rasterizer yet (reads before it exists cannot invalidate).
+    [[nodiscard]] bool HasRasterizer();
+
     /// Notify rasterizer that any caches of the specified region should be invalidated
     void InvalidateRegion(DAddr addr, u64 size, bool preserve_gpu_writes = false);
 
