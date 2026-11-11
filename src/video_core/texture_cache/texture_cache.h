@@ -1740,11 +1740,25 @@ void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
 
     // Made where a dropped GPU-written image left stale bytes (MarkStale): nothing to upload.
     // Pages the buffer cache wrote on the GPU may hold data written back since: upload those.
+    const bool force_upload = std::getenv("EDEN_NX2_FORCE_UPLOAD") != nullptr;
+    if (std::getenv("EDEN_NX2_UPLOAD_PROBE") != nullptr) {
+        // Is an image being filled from guest memory that holds nothing? A black object is exactly
+        // an image whose upload brought (or skipped) nothing.
+        static std::atomic<u32> upload_probes{};
+        if (upload_probes.fetch_add(1) < 400) {
+            std::array<u8, 256> sample{};
+            gpu_memory->ReadBlockUnsafe(image.gpu_addr, sample.data(), sample.size());
+            const auto nz = std::count_if(sample.begin(), sample.end(), [](u8 v) { return v != 0; });
+            LOG_INFO(HW_GPU, "UPLOADPROBE addr={:#x} size={} nonzero={} stale={} force={}",
+                     image.cpu_addr, image.guest_size_bytes, nz,
+                     stale_pages.IsAll(image.cpu_addr, image.guest_size_bytes), force_upload);
+        }
+    }
     if (Tegra::g_nx2_ampere.load(std::memory_order_relaxed) && image.dirty_layers.empty() &&
         False(image.flags & (ImageFlagBits::Sparse | ImageFlagBits::SparseLayers |
                              ImageFlagBits::SparseTiles | ImageFlagBits::Unbacked)) &&
         stale_pages.IsAll(image.cpu_addr, image.guest_size_bytes)) {
-        if (!Tegra::Nx2MayBeGpuWritten(image.cpu_addr, image.guest_size_bytes)) {
+        if (!force_upload && !Tegra::Nx2MayBeGpuWritten(image.cpu_addr, image.guest_size_bytes)) {
             ++tc_stale_skips;
             tc_stale_skip_bytes += image.guest_size_bytes;
             runtime.TransitionImageLayout(image);

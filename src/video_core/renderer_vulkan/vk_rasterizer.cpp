@@ -1497,7 +1497,8 @@ bool RasterizerVulkan::MustFlushRegion(DAddr addr, u64 size, VideoCommon::CacheT
 }
 
 bool RasterizerVulkan::HasPendingQueries(DAddr addr, u64 size) {
-    return query_cache.IsRegionGpuModified(addr, size);
+    // Query results land in guest memory through the buffer cache, so its tracker answers this.
+    return buffer_cache.IsRegionGpuModified(addr, size);
 }
 
 VideoCore::RasterizerDownloadArea RasterizerVulkan::GetFlushArea(DAddr addr, u64 size) {
