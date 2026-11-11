@@ -7,6 +7,9 @@
 #include "core/file_sys/errors.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/filesystem/fsp/fs_i_file.h"
+#include <cstdlib>
+#include <chrono>
+#include <atomic>
 
 namespace Service::FileSystem {
 
@@ -32,6 +35,16 @@ Result IFile::Read(
     s64 size) {
     LOG_DEBUG(Service_FS, "called, option={}, offset={:#x}, length={}", option.value, offset,
               size);
+
+    if (std::getenv("EDEN_NX2_FS_PROBE") != nullptr && size >= 8) {
+        static const auto probe_start = std::chrono::steady_clock::now();
+        static std::atomic<u32> logged{};
+        if (true &&
+            logged.fetch_add(1) < 5000) {
+            LOG_INFO(Service_FS, "FSPROBE dest={:#x} off={:#x} size={}",
+                     static_cast<u64>(reinterpret_cast<uintptr_t>(out_buffer.data())), offset, size);
+        }
+    }
 
     // Read the data from the Storage backend
     R_RETURN(
