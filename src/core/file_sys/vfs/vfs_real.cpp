@@ -14,8 +14,12 @@
 #include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "core/file_sys/vfs/vfs.h"
+#include <atomic>
+#include <cstdlib>
 #include <zstd.h>
 
+#include "common/logging.h"
+#include "core/core.h"
 #include "core/file_sys/vfs/vfs_real.h"
 
 // For FileTimeStampRaw
@@ -167,22 +171,35 @@ void ZsVfsFile::EnsureDecoded() const {
     ZSTD_initDStream(stream);
     ZSTD_inBuffer in{compressed.data(), compressed.size(), 0};
     std::vector<u8> out(ZSTD_DStreamOutSize());
-    while (in.pos < in.size) {
+    constexpr std::size_t DecodedLimit = 512ull << 20;
+    std::size_t stalls{};
+    while (in.pos < in.size && decoded.size() < DecodedLimit) {
         ZSTD_outBuffer ob{out.data(), out.size(), 0};
+        const auto before = in.pos;
         const auto result = ZSTD_decompressStream(stream, &ob, &in);
         if (ZSTD_isError(result)) {
             decode_failed = true;
             break;
         }
         decoded.insert(decoded.end(), out.data(), out.data() + ob.pos);
-        if (result == 0 && in.pos >= in.size) {
-            break;
-        }
-        if (ob.pos == 0 && in.pos >= in.size) {
-            break;
+        // A frame that ended cleanly may be followed by another; anything that consumes no input
+        // and produces no output would otherwise spin.
+        if (result != 0 && in.pos == before && ob.pos == 0) {
+            if (++stalls > 3) {
+                break;
+            }
+        } else {
+            stalls = 0;
         }
     }
     ZSTD_freeDStream(stream);
+    if (decode_failed || decoded.empty()) {
+        static std::atomic<u32> shout{};
+        if (shout.fetch_add(1) < 8) {
+            LOG_WARNING(Core, "zs member {:.60} failed to decode ({} bytes in)", inner->GetName(),
+                        compressed.size());
+        }
+    }
 }
 
 std::size_t ZsVfsFile::Read(u8* data, std::size_t length, std::size_t offset) const {
@@ -222,9 +239,12 @@ VirtualFile RealVfsFilesystem::OpenFileFromEntry(std::string_view path_, std::op
     this->InsertReferenceIntoListLocked(*reference);
 
     auto file = std::make_shared<RealVfsFile>(*this, std::move(reference), path, perms, size);
-    if (path.ends_with(".zs")) {
-        // Served decompressed; not cached, since each opened member decodes independently.
-        return std::make_shared<ZsVfsFile>(file);
+    const bool decode_zs = std::getenv("EDEN_NX2_ZS_DECOMPRESS") != nullptr;
+    if (decode_zs && path.ends_with(".zs")) {
+        // Served decompressed, and cached so a re-open reuses the decoded bytes.
+        auto wrapped = std::make_shared<ZsVfsFile>(file);
+        cache[path] = wrapped;
+        return wrapped;
     }
     cache[path] = file;
 
