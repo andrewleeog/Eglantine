@@ -803,8 +803,11 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
         // whose texture reads empty is what renders as a flat black object.
         static const auto probe_start = std::chrono::steady_clock::now();
         static std::atomic<u32> traced{};
-        if (std::chrono::steady_clock::now() - probe_start > std::chrono::seconds{45} &&
-            traced.fetch_add(1) < 4000) {
+        const u64 probe_verts = is_indexed
+                                    ? maxwell3d->draw_manager.draw_state.index_buffer.count
+                                    : maxwell3d->draw_manager.draw_state.vertex_buffer.count;
+        if (std::chrono::steady_clock::now() - probe_start > std::chrono::seconds{60} &&
+            probe_verts >= 300 && traced.fetch_add(1) < 20000) {
             const auto& cb = maxwell3d->state.shader_stages[4].const_buffers[2];
             const u32 handle = cb.enabled ? gpu_memory->Read<u32>(cb.address + 0x20) : 0;
             const u32 tic_index = handle & 0xfffff;
@@ -818,10 +821,16 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
                 std::count_if(sample.begin(), sample.end(), [](u8 v) { return v != 0; });
             const bool mapped = gpu_memory->IsFullyMappedRange(tex, 4096);
             const auto resolved = gpu_memory->GpuToCpuAddress(tex, 4096);
+            std::array<u8, 2048> wide{};
+            gpu_memory->ReadBlockUnsafe(tex, wide.data(), wide.size());
+            const auto nz = std::count_if(wide.begin(), wide.end(), [](u8 v) { return v != 0; });
             LOG_INFO(HW_GPU,
-                     "TEXTRACE tex={:#x} nonzero={} w={} h={} fmt={} draws={} mapped={} cpu={:#x}",
+                     "TEXTRACE tex={:#x} nonzero={} w={} h={} fmt={} draws={} mapped={} cpu={:#x} "
+                     "nz2k={} verts={}",
                      tex, nonzero, (tic[4] & 0xffff) + 1, (tic[5] & 0xffff) + 1, tic[0], traced.load(),
-                     mapped, resolved ? static_cast<u64>(*resolved) : 0ull);
+                     mapped, resolved ? static_cast<u64>(*resolved) : 0ull, nz,
+                     is_indexed ? maxwell3d->draw_manager.draw_state.index_buffer.count
+                                : maxwell3d->draw_manager.draw_state.vertex_buffer.count);
             if (const char* dir = std::getenv("EDEN_NX2_TEXTURE_DUMP_DIR");
                 dir != nullptr && traced.load() > 3950) {
                 std::vector<u8> bytes(1u << 20);

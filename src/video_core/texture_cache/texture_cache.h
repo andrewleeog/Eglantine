@@ -3302,6 +3302,20 @@ void TextureCache<P>::RegisterImage(ImageId image_id) {
                "Trying to register an already registered image");
     image.flags |= ImageFlagBits::Registered;
     total_used_memory += ImageMemoryBytes(slot_images[image_id]);
+    if (std::getenv("EDEN_NX2_IMAGE_PROBE") != nullptr) {
+        static const auto probe_start = std::chrono::steady_clock::now();
+        static std::atomic<u32> probes{};
+        if (std::chrono::steady_clock::now() - probe_start > std::chrono::seconds{90} &&
+            probes.fetch_add(1) < 400) {
+            std::array<u8, 64> sample{};
+            gpu_memory->ReadBlockUnsafe(image.gpu_addr, sample.data(), sample.size());
+            const auto nz = std::count_if(sample.begin(), sample.end(), [](u8 v) { return v != 0; });
+            if (nz == 0) {
+                LOG_INFO(HW_GPU, "IMAGEPROBE addr={:#x} size={} EMPTY", image.cpu_addr,
+                         image.guest_size_bytes);
+            }
+        }
+    }
     image.lru_index = lru_cache.Insert(image_id, frame_tick);
 
     ForEachGPUPage(image.gpu_addr, image.guest_size_bytes, [this, image_id](u64 page) {
