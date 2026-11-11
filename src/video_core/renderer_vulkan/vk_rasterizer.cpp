@@ -798,6 +798,43 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
     TraceWindowTarget(*maxwell3d, *gpu_memory, is_indexed ? "draw-indexed" : "draw",
                       is_indexed ? maxwell3d->draw_manager.draw_state.index_buffer.count
                                  : maxwell3d->draw_manager.draw_state.vertex_buffer.count);
+    if (std::getenv("EDEN_NX2_TEX_TRACE") != nullptr) {
+        // Per-draw: first bound texture's address and whether its memory holds anything. A draw
+        // whose texture reads empty is what renders as a flat black object.
+        static const auto probe_start = std::chrono::steady_clock::now();
+        static std::atomic<u32> traced{};
+        if (std::chrono::steady_clock::now() - probe_start > std::chrono::seconds{45} &&
+            traced.fetch_add(1) < 4000) {
+            const auto& cb = maxwell3d->state.shader_stages[4].const_buffers[2];
+            const u32 handle = cb.enabled ? gpu_memory->Read<u32>(cb.address + 0x20) : 0;
+            const u32 tic_index = handle & 0xfffff;
+            std::array<u32, 8> tic{};
+            gpu_memory->ReadBlockUnsafe(maxwell3d->regs.tex_header.Address() + u64{tic_index} * 32,
+                                        tic.data(), sizeof(tic));
+            const GPUVAddr tex = (GPUVAddr{tic[2] & 0xffff} << 32) | tic[1];
+            std::array<u8, 64> sample{};
+            gpu_memory->ReadBlockUnsafe(tex, sample.data(), sample.size());
+            const auto nonzero =
+                std::count_if(sample.begin(), sample.end(), [](u8 v) { return v != 0; });
+            const bool mapped = gpu_memory->IsFullyMappedRange(tex, 4096);
+            const auto resolved = gpu_memory->GpuToCpuAddress(tex, 4096);
+            LOG_INFO(HW_GPU,
+                     "TEXTRACE tex={:#x} nonzero={} w={} h={} fmt={} draws={} mapped={} cpu={:#x}",
+                     tex, nonzero, (tic[4] & 0xffff) + 1, (tic[5] & 0xffff) + 1, tic[0], traced.load(),
+                     mapped, resolved ? static_cast<u64>(*resolved) : 0ull);
+            if (const char* dir = std::getenv("EDEN_NX2_TEXTURE_DUMP_DIR");
+                dir != nullptr && traced.load() > 3950) {
+                std::vector<u8> bytes(1u << 20);
+                gpu_memory->ReadBlockUnsafe(tex, bytes.data(), bytes.size());
+                const auto path =
+                    fmt::format("{}/tex_{:05}_{:x}.bin", dir, traced.load(), static_cast<u64>(tex));
+                if (std::FILE* file = std::fopen(path.c_str(), "wb")) {
+                    std::fwrite(bytes.data(), 1, bytes.size(), file);
+                    std::fclose(file);
+                }
+            }
+        }
+    }
     // EDEN_NX2_CB24_TRACE: for draws whose vertex shader reads bank 24, show the inline
     // constant buffer upload target (CB_ADDRESS) and its first words.
     // EDEN_NX2_DRAW_PROBE: periodically describe draws (rt, topology, streams, index
