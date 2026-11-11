@@ -623,6 +623,10 @@ double Nx2KeyClockSeconds(); // emu_window_sdl3.cpp
 // Scripted input must reach titles that only read npads (controllers): MKW's menu ignores
 // the keyboard engine entirely, while DKB reads the HID keyboard. Map the script's keyboard
 // scancode to the SDL gamepad button of the pad bound to player 0 and press that too.
+static std::string pads_guid_str(const PadIdentifier &id) {
+    return id.guid.RawString();
+}
+
 static void Nx2ScriptPressPad(InputCommon::InputSubsystem &input_subsystem, int code, bool press) {
     // keyboard scancode -> SDL gamepad button (Switch layout on an Xbox-labelled pad)
     static const std::unordered_map<int, int> kbd_to_pad{
@@ -657,9 +661,12 @@ static void Nx2ScriptPressPad(InputCommon::InputSubsystem &input_subsystem, int 
     }
     try {
         sdl->ForceButton(*pad_id, mapped->second, press);
+        LOG_INFO(Frontend, "Key script pad {} button {} guid={} port={} pad={}",
+                 press ? "press" : "release", mapped->second, pads_guid_str(*pad_id),
+                 pad_id->port, pad_id->pad);
     } catch (const std::exception &e) {
         // pad not connected/asleep: keyboard delivery still happened above
-        LOG_DEBUG(Frontend, "Key script pad press skipped: {}", e.what());
+        LOG_WARNING(Frontend, "Key script pad press skipped: {}", e.what());
     }
 }
 

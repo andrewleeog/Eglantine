@@ -10,6 +10,10 @@
 #include "common/assert.h"
 #include "common/logging.h"
 #include "video_core/engines/fermi_2d.h"
+
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include "video_core/engines/sw_blitter/blitter.h"
 #include "video_core/memory_manager.h"
 #include "video_core/rasterizer_interface.h"
@@ -155,7 +159,19 @@ void Fermi2D::Blit() {
     }
 
     memory_manager.FlushCaching();
-    if (!rasterizer->AccelerateSurfaceCopy(src, regs.dst, config)) {
+    const bool force_sw = std::getenv("EDEN_NX2_NO_ACCEL_COPY") != nullptr;
+    const bool ok = !force_sw && rasterizer->AccelerateSurfaceCopy(src, regs.dst, config);
+    if (std::getenv("EDEN_NX2_2D_PROBE") != nullptr) {
+        static const auto probe_start = std::chrono::steady_clock::now();
+        static std::atomic<u32> logged{};
+        if (std::chrono::steady_clock::now() - probe_start > std::chrono::seconds{60} &&
+            logged.fetch_add(1) < 3000) {
+            LOG_INFO(Service, "TWODPROBE dst={:#x} src={:#x} accel={} forced_sw={} dst_layout={}",
+                     static_cast<u64>(regs.dst.Address()), static_cast<u64>(src.Address()), ok,
+                     force_sw, static_cast<u32>(regs.dst.linear));
+        }
+    }
+    if (!ok) {
         sw_blitter->Blit(src, regs.dst, config);
     }
 }
