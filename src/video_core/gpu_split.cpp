@@ -15,6 +15,10 @@
 #include <windows.h>
 #endif
 #include <cstdio>
+#ifdef __linux__
+#include <execinfo.h>
+#include <unistd.h>
+#endif
 
 #include "common/logging.h"
 #include "common/settings.h"
@@ -78,12 +82,63 @@ void GpuSplit::CheckOwner(const char* where) {
                                                      reinterpret_cast<uintptr_t>(module)));
     }
     std::fflush(stderr);
+#elif defined(__linux__)
+    // Any use off the back while it runs: an idle back can wake mid-use (no busy filter).
+    if (!Get().BackRunning() || OnBackThread() ||
+        Get().front_owns.load(std::memory_order_acquire)) {
+        return;
+    }
+    static std::atomic<u32> reports{};
+    if (reports.fetch_add(1) >= 12) {
+        return;
+    }
+    std::fprintf(stderr, "GPU split owner check: %s on thread %ld while the back runs\n", where,
+                 static_cast<long>(gettid()));
+    void* frames[40];
+    const int count = backtrace(frames, 40);
+    backtrace_symbols_fd(frames, count, 2);
+    std::fflush(stderr);
 #else
     (void)where;
 #endif
 }
 
 GpuSplit GpuSplit::instance;
+
+void GpuSplit::Claim() {
+    Drain();
+    front_owns.store(true, std::memory_order_seq_cst);
+    while (in_hook.load(std::memory_order_seq_cst)) {
+        Pause();
+    }
+}
+
+void GpuSplit::Release() {
+    front_owns.store(false, std::memory_order_seq_cst);
+    // A hook skipped meanwhile runs now: the back may be asleep with deferred work unsubmitted.
+    if (hook_skipped.exchange(false, std::memory_order_seq_cst)) {
+        RequestIdleHook();
+    }
+}
+
+bool GpuSplit::BeginHook() {
+    in_hook.store(true, std::memory_order_seq_cst);
+    if (front_owns.load(std::memory_order_seq_cst)) {
+        in_hook.store(false, std::memory_order_seq_cst);
+        hook_skipped.store(true, std::memory_order_seq_cst);
+        // The front may have released between the two stores: don't lose the request.
+        if (!front_owns.load(std::memory_order_seq_cst) &&
+            hook_skipped.exchange(false, std::memory_order_seq_cst)) {
+            hook_requested.store(true, std::memory_order_seq_cst);
+        }
+        return false;
+    }
+    return true;
+}
+
+void GpuSplit::EndHook() {
+    in_hook.store(false, std::memory_order_release);
+}
 
 void GpuSplit::MaybeStart(Core::System& system_) {
     static const char mode = [] {
@@ -366,7 +421,10 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
             }
             if (available == read_position && idle_hook != nullptr) {
                 hook_requested.store(false, std::memory_order_seq_cst);
-                idle_hook(idle_argument);
+                if (BeginHook()) {
+                    idle_hook(idle_argument);
+                    EndHook();
+                }
                 available = published.load(std::memory_order_acquire);
             }
             if (available == read_position) {
@@ -393,7 +451,10 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
             if (hook_requested.load(std::memory_order_relaxed) &&
                 idle_hook != nullptr) [[unlikely]] {
                 hook_requested.store(false, std::memory_order_seq_cst);
-                idle_hook(idle_argument);
+                if (BeginHook()) {
+                    idle_hook(idle_argument);
+                    EndHook();
+                }
             }
             // Hand ring space back now and then while working through a long batch, and at once
             // when the front waits for this position (WaitForWriters).

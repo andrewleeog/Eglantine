@@ -124,6 +124,29 @@ public:
     /// Waits until the back executed everything sent so far.
     void Drain();
 
+    /// Front only: drains the back and keeps its idle hook (the rasterizer's deferred submits)
+    /// from running until the scope ends, so the front can use the caches and the scheduler.
+    /// A bare Drain() is not enough: the idle back runs that hook on its own.
+    class Exclusive {
+    public:
+        explicit Exclusive(GpuSplit& split_) : split{split_}, claimed{split_.Active()} {
+            if (claimed) {
+                split.Claim();
+            }
+        }
+        ~Exclusive() {
+            if (claimed) {
+                split.Release();
+            }
+        }
+        Exclusive(const Exclusive&) = delete;
+        Exclusive& operator=(const Exclusive&) = delete;
+
+    private:
+        GpuSplit& split;
+        bool claimed;
+    };
+
     /// Compute or copy work was just sent: what can write GPU-written command lists.
     void NoteWriter() {
         last_writer_position = write_position;
@@ -202,7 +225,16 @@ private:
     static inline thread_local bool on_back_thread{};
     void (*idle_hook)(void*){};
     void* idle_argument{};
+    void Claim();
+    void Release();
+    /// Back side of Exclusive: whether the idle hook may run now (EndHook after it ran).
+    bool BeginHook();
+    void EndHook();
+
     alignas(64) std::atomic<bool> hook_requested{};
+    std::atomic<bool> front_owns{};
+    std::atomic<bool> in_hook{};
+    std::atomic<bool> hook_skipped{};
     std::atomic<bool> back_running{};
 
     // 128 bytes: x86 spatial prefetchers pull 64-byte lines in pairs. back_waiting and wake are

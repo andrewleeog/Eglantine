@@ -103,7 +103,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                                 VideoCommon::GpuSplit::FastDrawNeutral);
                 } else if (auto* run = std::get_if<RunCommand>(&next.data)) {
                     if (run->before_later_reads) {
-                        split.Drain();
+                        VideoCommon::GpuSplit::Exclusive exclusive{split};
                         run->func();
                     } else {
                         split.DeferFunction(std::move(run->func));

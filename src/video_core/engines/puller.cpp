@@ -45,7 +45,7 @@ u32 ReadSemaphoreWord(DmaPusher& dma_pusher, GPUVAddr address) {
 }
 
 // With the GPU thread split (gpu_split.h) the rasterizer belongs to the back thread: work that
-// only feeds it runs there in order; reads of what it wrote first wait for it (DrainBack).
+// only feeds it runs there in order; reads of what it wrote first wait for it (ExclusiveBack).
 template <typename Func>
 void OnBack(const Func& func) {
     if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
@@ -55,8 +55,10 @@ void OnBack(const Func& func) {
     }
 }
 
-void DrainBack() {
-    VideoCommon::GpuSplit::Get().Drain();
+// Drains the split's back and holds its idle hook off for the rest of the scope: the code after
+// it uses the caches and the scheduler on the front (ReleaseFences, cache reads).
+[[nodiscard]] VideoCommon::GpuSplit::Exclusive ExclusiveBack() {
+    return VideoCommon::GpuSplit::Exclusive{VideoCommon::GpuSplit::Get()};
 }
 
 } // Anonymous namespace
@@ -80,7 +82,7 @@ bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
     }
     // The release may still be queued for the split GPU thread's back half (and the caches
     // ReadSemaphoreWord asks are its state).
-    DrainBack();
+    const auto exclusive = ExclusiveBack();
     const u32 current = ReadSemaphoreWord(dma_pusher, pending_acquire->address);
     if (Nx2SemaphoreWaiters::Get().Latched(this)) {
         if (static std::atomic<u32> rescued{};
@@ -251,7 +253,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             return;
         }
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireChecks, 1);
-        DrainBack();
+        const auto exclusive = ExclusiveBack();
         if (acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
             return;
         }
@@ -270,7 +272,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             waiters.Remove(this);
         }
     } else {
-        DrainBack();
+        const auto exclusive = ExclusiveBack();
         do {
             u32 word = dma_pusher.memory_manager.Read<u32>(regs.semaphore_address.SemaphoreAddress());
             regs.acquire_source = true;
@@ -328,7 +330,7 @@ void Puller::ProcessSemaphoreRelease(DmaPusher& dma_pusher) {
 }
 
 void Puller::ProcessSemaphoreAcquire(DmaPusher& dma_pusher) {
-    DrainBack();
+    const auto exclusive = ExclusiveBack();
     u32 word = dma_pusher.memory_manager.Read<u32>(regs.semaphore_address.SemaphoreAddress());
     const auto value = regs.semaphore_acquire;
     while (word != value) {
@@ -357,7 +359,7 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
         return;
     }
     // Acquires: check once after flushing pending fences; never block the GPU thread on them.
-    DrainBack();
+    const auto exclusive = ExclusiveBack();
     dma_pusher.rasterizer->ReleaseFences();
     const u32 word = dma_pusher.memory_manager.Read<u32>(address);
     const bool ready = operation == 0   ? word == payload
