@@ -232,6 +232,12 @@ VirtualFile RealVfsFilesystem::OpenFileFromEntry(std::string_view path_, std::op
     }
 
     if (!size && !FS::IsFile(path)) {
+        if (std::getenv("EDEN_NX2_FS_PROBE") != nullptr) {
+            static std::atomic<u32> misses{};
+            if (misses.fetch_add(1) < 60) {
+                LOG_WARNING(Core, "open miss: {}", path);
+            }
+        }
         return nullptr;
     }
 
