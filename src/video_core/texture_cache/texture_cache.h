@@ -1758,13 +1758,15 @@ void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
         False(image.flags & (ImageFlagBits::Sparse | ImageFlagBits::SparseLayers |
                              ImageFlagBits::SparseTiles | ImageFlagBits::Unbacked)) &&
         stale_pages.IsAll(image.cpu_addr, image.guest_size_bytes)) {
-        if (!force_upload && !Tegra::Nx2MayBeGpuWritten(image.cpu_addr, image.guest_size_bytes)) {
+        // Do not return here: a layout transition does not restore the pixels of a freshly created
+        // host image, so sampling it undefined reads as black. Upload instead until GPU-written
+        // contents are preserved across creation.
+        if (force_upload || !Tegra::Nx2MayBeGpuWritten(image.cpu_addr, image.guest_size_bytes)) {
             ++tc_stale_skips;
             tc_stale_skip_bytes += image.guest_size_bytes;
-            runtime.TransitionImageLayout(image);
-            return;
+        } else {
+            ++tc_stale_gpu_written;
         }
-        ++tc_stale_gpu_written;
     }
 
     if (True(image.flags & ImageFlagBits::SparseLayers)) {
